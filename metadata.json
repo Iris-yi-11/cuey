@@ -1,0 +1,6 @@
+{
+  "name": "PM Cue",
+  "description": "A work-native English learning tool designed specifically for Product Managers. It transforms daily PM tasks and Chinese work thoughts into immediately usable professional English expressions and speaking practice materials.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
