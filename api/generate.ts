@@ -5,13 +5,33 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
-import { CueType, GENERATE_CUE_SCENARIOS } from "../src/types";
-import type { GenerateCueScenario, GeneratedCueItem } from "../src/types";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 const GEMINI_MODEL = "gemini-3.5-flash";
+const CUE_TYPE_AI_PRODUCT = "ai_product";
+const GENERATE_CUE_SCENARIOS = [
+  "Meeting",
+  "PRD Review",
+  "Stakeholder Update",
+] as const;
+
+type GenerateCueScenario = (typeof GENERATE_CUE_SCENARIOS)[number];
+
+interface GeneratedCueItem {
+  id: string;
+  sourceType: "work";
+  cueType: typeof CUE_TYPE_AI_PRODUCT;
+  title: string;
+  chineseExplanation: string;
+  englishOutput: string;
+  phrases: string[];
+  scenario: GenerateCueScenario;
+  speakingPrompt: string;
+  sampleAnswer: string;
+  createdAt: string;
+}
 
 const isGenerateCueScenario = (value: unknown): value is GenerateCueScenario =>
   typeof value === "string" &&
@@ -76,7 +96,7 @@ const buildMockCue = async (
   return {
     id: `cue_generated_${Date.now()}`,
     sourceType: "work",
-    cueType: CueType.AI_PRODUCT,
+    cueType: CUE_TYPE_AI_PRODUCT,
     title,
     chineseExplanation: chineseThought,
     englishOutput,
@@ -183,7 +203,7 @@ export default async function handler(req: any, res: any) {
     const item: GeneratedCueItem = {
       id: `cue_generated_${Date.now()}`,
       sourceType: "work",
-      cueType: CueType.AI_PRODUCT,
+      cueType: CUE_TYPE_AI_PRODUCT,
       title: parsedData.title || "PM English Cue",
       chineseExplanation: parsedData.chineseExplanation || chineseThought,
       englishOutput: parsedData.englishOutput || "",

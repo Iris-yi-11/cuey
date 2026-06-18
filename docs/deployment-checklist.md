@@ -89,6 +89,7 @@ pnpm run dev
 - Refresh preserves saved state through `localStorage`.
 - Missing or invalid API key path shows a usable fallback or error state.
 - Vercel preview URL opens from the Pull Request deployment status.
+- If preview deployments are protected by Vercel, use the public alias for external review.
 - `POST /api/generate` returns success in mock mode or with a valid `GEMINI_API_KEY`.
 
 ## Rollback Notes

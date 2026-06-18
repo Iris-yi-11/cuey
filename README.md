@@ -131,7 +131,7 @@ Optional runtime behavior currently exists in `server.ts` for mock mode, but `.e
 
 ## Public Demo Link
 
-Public demo link: `TBD`
+Public demo link: https://cuey-sigma.vercel.app
 
 AI Studio source link: https://ai.studio/apps/a161340c-d376-4df4-97aa-708948d3d10e
 
