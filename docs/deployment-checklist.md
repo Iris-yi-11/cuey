@@ -2,6 +2,13 @@
 
 ## Commands
 
+Vercel preview deployment:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run build
+```
+
 Build:
 
 ```bash
@@ -41,6 +48,7 @@ pnpm run dev
 ## Required Environment Variables
 
 - `GEMINI_API_KEY`: server-side Gemini API key. Store it in the deployment platform secret manager.
+- `NEXT_PUBLIC_MOCK_AI`: optional preview flag. Use `true` only when a mock-only demo is intended.
 
 ## Gemini Runtime Notes
 
@@ -53,13 +61,16 @@ pnpm run dev
 
 ## Deployment Platform Notes
 
-- The app is an Express server with Vite static output.
+- Current preview target: Vercel.
+- `vercel.json` defines Vite build settings and SPA rewrites.
+- `api/generate.ts` provides the Vercel Function for `POST /api/generate`.
+- The local app remains an Express server with Vite static output.
 - Production entry after build: `dist/server.cjs`
 - Static frontend files are served from `dist/`.
-- Confirm the platform exposes the expected port or update `server.ts` before production deployment.
 - Do not expose `.env`, `.env.local`, private keys, or secret files.
 - Confirm `GEMINI_API_KEY` is configured before production rollout.
 - Confirm the production platform can reach Gemini provider directly or through an approved outbound proxy.
+- If deploying to Cloud Run later, confirm the app reads the platform-provided `PORT`.
 
 ## Smoke Test Checklist
 
@@ -77,6 +88,8 @@ pnpm run dev
 - Generated cue can be saved to Cue Bank.
 - Refresh preserves saved state through `localStorage`.
 - Missing or invalid API key path shows a usable fallback or error state.
+- Vercel preview URL opens from the Pull Request deployment status.
+- `POST /api/generate` returns success in mock mode or with a valid `GEMINI_API_KEY`.
 
 ## Rollback Notes
 

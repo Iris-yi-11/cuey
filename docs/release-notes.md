@@ -20,6 +20,7 @@ Date: 2026-06-17
 - Added `.env.local` loading support in `server.ts`.
 - Verified Gemini SDK error path with a non-secret fake key.
 - Verified live successful Gemini generation through local proxy access.
+- Added Vercel preview deployment configuration and `POST /api/generate` Vercel Function.
 
 ### Known Limitations
 
@@ -28,10 +29,12 @@ Date: 2026-06-17
 - The app still persists data only in browser `localStorage`.
 - Local Gemini access depends on reachable provider network or local proxy configuration.
 - `src/App.tsx` remains large and should be refactored after MVP flow is protected.
+- Local Express route and Vercel Function currently duplicate generation logic.
 
 ### Deployment Notes
 
-- Build command: `npm run build`
-- Start command: `npm run start`
+- Preview platform: Vercel
+- Build command: `pnpm run build`
+- Output directory: `dist`
 - Required environment variable: `GEMINI_API_KEY`
 - Do not deploy real production traffic until Gemini path and smoke tests pass.

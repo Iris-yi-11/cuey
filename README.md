@@ -119,10 +119,14 @@ Optional runtime behavior currently exists in `server.ts` for mock mode, but `.e
 
 ## Deployment Notes
 
-- Build command: `npm run build`
-- Start command: `npm run start`
-- Production server serves `dist/` through `dist/server.cjs`
+- Preview platform: Vercel
+- Install command: `pnpm install --frozen-lockfile`
+- Build command: `pnpm run build`
+- Output directory: `dist`
+- Vercel API route: `api/generate.ts`
+- Local production server still serves `dist/` through `dist/server.cjs`
 - Configure `GEMINI_API_KEY` in the deployment platform secret manager
+- Set `NEXT_PUBLIC_MOCK_AI=true` only for mock demo previews
 - See `docs/gemini-runtime.md` for Gemini runtime verification
 
 ## Public Demo Link
