@@ -4,6 +4,18 @@ PM Cue is a work-native English learning tool for Product Managers who need to t
 
 PM Cue 是面向产品经理的工作场景英语表达工具，帮助用户把中文工作思路转成自然、专业、可直接使用的英文表达。
 
+## Current Status
+
+- Product stage: MVP preview
+- Public demo: https://cuey-sigma.vercel.app
+- GitHub repo: https://github.com/Iris-yi-11/cuey
+- Current release PR: https://github.com/Iris-yi-11/cuey/pull/1
+- Deployment platform: Vercel
+- Production branch: `main`
+- Active preview branch: `codex/ship-v0.1-preview`
+
+Use the public demo link for user sharing. Use GitHub PRs and Issues for version management, PM acceptance, and development tracking.
+
 ## Target Users
 
 - Chinese-speaking Product Managers working with global teams
@@ -134,6 +146,20 @@ Optional runtime behavior currently exists in `server.ts` for mock mode, but `.e
 Public demo link: https://cuey-sigma.vercel.app
 
 AI Studio source link: https://ai.studio/apps/a161340c-d376-4df4-97aa-708948d3d10e
+
+## Version Management
+
+- Keep `main` as the stable branch.
+- Use one branch and one Pull Request per feature or release task.
+- Use Draft PRs for work in progress and Ready PRs for PM acceptance.
+- Use GitHub Issues for P1/P2 tasks and feedback follow-up.
+- Tag public demo milestones, for example `v0.1.0-mvp-preview`.
+
+Recommended labels:
+
+- `P0`, `P1`, `P2`
+- `feature`, `fix`, `docs`, `infra`
+- `pm-review`
 
 ## Development Docs
 
