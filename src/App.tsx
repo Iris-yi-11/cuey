@@ -171,6 +171,7 @@ export default function App() {
         setDailyCueItems(response.items);
         setDailyBrief(response.brief);
         setDailyFeedMode(response.generatedFrom || "empty_live_sources");
+        setDailyError(null);
       } else {
         setDailyError(response.error || "Daily Cue 暂时无法加载，已保留本地默认内容。");
       }
@@ -434,6 +435,8 @@ export default function App() {
       setDailyCueItems(response.items);
       setDailyBrief(response.brief);
       setDailyFeedMode(response.generatedFrom || "empty_live_sources");
+      setDailyCategoryFilter("all");
+      setDailyError(null);
       triggerToast("Daily Cue 已更新", "success");
     } else {
       setDailyError(response.error || "刷新失败，已保留上一版 Daily Cue。");
@@ -595,6 +598,16 @@ export default function App() {
     () => getDailyCategoryCounts(dailyCueItems),
     [dailyCueItems]
   );
+
+  useEffect(() => {
+    if (
+      dailyCategoryFilter !== "all" &&
+      dailyCueItems.length > 0 &&
+      (categoryCounts.get(dailyCategoryFilter) || 0) === 0
+    ) {
+      setDailyCategoryFilter("all");
+    }
+  }, [categoryCounts, dailyCategoryFilter, dailyCueItems.length]);
 
   const filteredDisplayDailyCards = useMemo(
     () => filterDailyCardsByCategory(displayDailyCards, dailyCueItems, dailyCategoryFilter),
