@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { SourceCandidate } from "../types";
+import type { SourceCandidate } from "../types.js";
 
 const RECENCY_WINDOW_HOURS = 48;
 const DAILY_ITEM_LIMIT = 12;

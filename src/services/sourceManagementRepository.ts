@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { sourceAllowlist } from "../data/sourceAllowlist";
-import type { SourceAllowlistItem } from "../types";
-import { isSupabaseConfigured, requestSupabaseTable } from "./supabaseRestService";
+import { sourceAllowlist } from "../data/sourceAllowlist.js";
+import type { SourceAllowlistItem } from "../types.js";
+import { isSupabaseConfigured, requestSupabaseTable } from "./supabaseRestService.js";
 
 const SOURCE_ALLOWLIST_TABLE = "source_allowlist";
 

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { CueItem } from "../types";
-import { isSupabaseConfigured, requestSupabaseTable } from "./supabaseRestService";
+import type { CueItem } from "../types.js";
+import { isSupabaseConfigured, requestSupabaseTable } from "./supabaseRestService.js";
 
 const CUE_BANK_TABLE = "cue_bank_items";
 

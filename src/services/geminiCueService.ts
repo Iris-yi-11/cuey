@@ -4,8 +4,8 @@
  */
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { CueType } from "../types";
-import type { GeneratedCueItem, GenerateCueScenario } from "../types";
+import { CueType } from "../types.js";
+import type { GeneratedCueItem, GenerateCueScenario } from "../types.js";
 
 const DEFAULT_GEMINI_MODELS = [
   "gemini-2.5-flash",

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { sourceCategories } from "../../src/data/sourceAllowlist";
-import { listManagedSources } from "../../src/services/sourceManagementRepository";
+import { sourceCategories } from "../../src/data/sourceAllowlist.js";
+import { listManagedSources } from "../../src/services/sourceManagementRepository.js";
 
 export default async function handler(req: any, res: any) {
   if (req.method !== "GET") {

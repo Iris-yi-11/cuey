@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { DailyWorkCue, GenerateCueScenario } from "../types";
+import type { DailyWorkCue, GenerateCueScenario } from "../types.js";
 
 const scenarioRotation: GenerateCueScenario[] = ["Meeting", "PRD Review", "Stakeholder Update"];
 

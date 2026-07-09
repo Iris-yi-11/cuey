@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { refreshDailyCues } from "../../src/services/dailyCueService";
+import { refreshDailyCues } from "../../src/services/dailyCueService.js";
 
 export default async function handler(req: any, res: any) {
   if (req.method !== "POST") {

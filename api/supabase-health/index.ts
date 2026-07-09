@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { isSupabaseConfigured, requestSupabaseTable } from "../../src/services/supabaseRestService";
+import { isSupabaseConfigured, requestSupabaseTable } from "../../src/services/supabaseRestService.js";
 
 export default async function handler(req: any, res: any) {
   if (req.method !== "GET") {

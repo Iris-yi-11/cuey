@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { buildDailyWorkCue } from "../../src/services/dailyWorkCueService";
+import { buildDailyWorkCue } from "../../src/services/dailyWorkCueService.js";
 
 export default async function handler(req: any, res: any) {
   if (req.method !== "GET") {

@@ -3,22 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { CueType } from "../types";
+import { CueType } from "../types.js";
 import type {
   DailyBrief,
   DailyCueItem,
   GenerateCueScenario,
   SourceCandidate,
   SourceFetchHealth,
-} from "../types";
-import { rankSourceCandidates } from "./rankingService";
-import { fetchSourceCandidates } from "./sourceFetchService";
-import { listManagedSources } from "./sourceManagementRepository";
+} from "../types.js";
+import { rankSourceCandidates } from "./rankingService.js";
+import { fetchSourceCandidates } from "./sourceFetchService.js";
+import { listManagedSources } from "./sourceManagementRepository.js";
 import {
   isDailyCuePersistenceEnabled,
   readPersistedDailyCues,
   writePersistedDailyCues,
-} from "./dailyCuePersistenceService";
+} from "./dailyCuePersistenceService.js";
 
 const DAILY_ITEM_LIMIT = 12;
 const DAILY_CACHE_TTL_MS = 30 * 60 * 1000;

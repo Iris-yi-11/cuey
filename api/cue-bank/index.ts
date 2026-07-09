@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { CueItem } from "../../src/types";
+import type { CueItem } from "../../src/types.js";
 import {
   deleteCueBankItem,
   isCueBankRemoteEnabled,
   listCueBankItems,
   upsertCueBankItem,
-} from "../../src/services/cueBankRepository";
-import { getSupabaseUserIdFromAuthHeader } from "../../src/services/supabaseRestService";
+} from "../../src/services/cueBankRepository.js";
+import { getSupabaseUserIdFromAuthHeader } from "../../src/services/supabaseRestService.js";
 
 export default async function handler(req: any, res: any) {
   try {

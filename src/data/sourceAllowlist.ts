@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { SourceAllowlistItem, SourceCategory } from "../types";
+import type { SourceAllowlistItem, SourceCategory } from "../types.js";
 
 export const sourceCategories: SourceCategory[] = [
   {

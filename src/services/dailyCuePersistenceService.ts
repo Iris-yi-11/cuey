@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { DailyCuesResponse } from "../types";
-import { isSupabaseConfigured, requestSupabaseTable } from "./supabaseRestService";
+import type { DailyCuesResponse } from "../types.js";
+import { isSupabaseConfigured, requestSupabaseTable } from "./supabaseRestService.js";
 
 const DAILY_CUE_KV_KEY_PREFIX = "pm-cue:daily-cues";
 const DAILY_CUE_SNAPSHOT_TABLE = "daily_cue_snapshots";

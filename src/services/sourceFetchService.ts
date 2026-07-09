@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { SourceAllowlistItem, SourceCandidate, SourceFetchHealth } from "../types";
+import type { SourceAllowlistItem, SourceCandidate, SourceFetchHealth } from "../types.js";
 
 const FETCH_TIMEOUT_MS = 7000;
 const MAX_ITEMS_PER_SOURCE = 5;

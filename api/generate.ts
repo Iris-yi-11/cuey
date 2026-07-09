@@ -4,7 +4,7 @@
  */
 
 import dotenv from "dotenv";
-import { generatePMCueWithGemini } from "../src/services/geminiCueService";
+import { generatePMCueWithGemini } from "../src/services/geminiCueService.js";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
