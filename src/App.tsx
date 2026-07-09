@@ -3,12 +3,44 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
-import { mockCues } from "./data/mockCues";
-import { GENERATE_CUE_SCENARIOS } from "./types";
-import type { CueItem, GenerateCueScenario } from "./types";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import {
+  loadCueBankFromStorage,
+  mergeCueBankItemsById,
+  saveCueBankToStorage,
+} from "./utils/cueBankStorage";
+import {
+  buildCueFromDailyItem,
+  filterDailyCardsByCategory,
+  getDailyCategoryCounts,
+} from "./utils/dailyCueViewModel";
+import type {
+  CueItem,
+  DailyBrief,
+  DailyCueItem,
+  DailyCuesResponse,
+  DailyWorkCue,
+  GenerateCueScenario,
+  SourceAllowlistItem,
+  SourceCategoryId,
+} from "./types";
 import CueDetailModal from "./components/CueDetailModal";
-import { generatePMCue } from "./services/aiService";
+import AuthMenu from "./components/AuthMenu";
+import SourceManagementPanel from "./components/SourceManagementPanel";
+import WorkCuePanel from "./components/WorkCuePanel";
+import { getSupabaseBrowserClient, readSupabaseAuthErrorFromUrl } from "./services/supabaseAuthClient";
+import type { User } from "@supabase/supabase-js";
+import {
+  deleteCueBankItemFromRemote,
+  fetchCueBankItems,
+  fetchDailyCues,
+  fetchDailyWorkCue,
+  fetchManagedSources,
+  generatePMCue,
+  refreshDailyCuesFromApi,
+  saveCueBankItem,
+  updateManagedSourceEnabledFromApi,
+} from "./services/aiService";
 import {
   Sparkles,
   BookOpen,
@@ -26,8 +58,10 @@ import {
   ListFilter,
   PlayCircle,
   AlertTriangle,
-  RotateCcw,
-  Zap
+  Zap,
+  RefreshCw,
+  ExternalLink,
+  Settings2,
 } from "lucide-react";
 
 // For Toast Alerts
@@ -37,12 +71,44 @@ interface Toast {
   type: "success" | "error" | "info";
 }
 
+const categoryLabels: Record<SourceCategoryId, string> = {
+  ai_models: "AI Models",
+  ai_products: "AI Products",
+  saas_devtools: "SaaS & DevTools",
+  pm_craft: "PM Craft",
+  market_signals: "Market Signals",
+};
+
+const feedModeLabels: Record<NonNullable<DailyCuesResponse["generatedFrom"]>, string> = {
+  live_sources: "Live sources",
+  partial_live_sources: "Partial live sources",
+  empty_live_sources: "No live items",
+};
+
 export default function App() {
   // Navigation active tab
   const [activeTab, setActiveTab] = useState<"daily" | "work" | "bank">("daily");
 
   // Daily Feed Loading state for skeleton display
   const [isDailyLoading, setIsDailyLoading] = useState(true);
+  const [isDailyRefreshing, setIsDailyRefreshing] = useState(false);
+  const [dailyError, setDailyError] = useState<string | null>(null);
+  const [dailyBrief, setDailyBrief] = useState<DailyBrief | null>(null);
+  const [dailyCueItems, setDailyCueItems] = useState<DailyCueItem[]>([]);
+  const [dailyFeedMode, setDailyFeedMode] = useState<DailyCuesResponse["generatedFrom"]>("empty_live_sources");
+  const [dailyCategoryFilter, setDailyCategoryFilter] = useState<"all" | SourceCategoryId>("all");
+  const [dailyWorkCue, setDailyWorkCue] = useState<DailyWorkCue | null>(null);
+  const [dailyWorkCueError, setDailyWorkCueError] = useState<string | null>(null);
+  const [isRemoteCueBankEnabled, setIsRemoteCueBankEnabled] = useState(false);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authAccessToken, setAuthAccessToken] = useState<string | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [managedSources, setManagedSources] = useState<SourceAllowlistItem[]>([]);
+  const [isSourcePanelOpen, setIsSourcePanelOpen] = useState(false);
+  const [isSourceLoading, setIsSourceLoading] = useState(false);
+  const [isSourceSaving, setIsSourceSaving] = useState(false);
+  const [sourceManagementError, setSourceManagementError] = useState<string | null>(null);
+  const [sourceLastSyncedAt, setSourceLastSyncedAt] = useState<string | null>(null);
 
   // Storage array State
   const [cues, setCues] = useState<CueItem[]>([]);
@@ -65,6 +131,95 @@ export default function App() {
     }
   }, [activeTab]);
 
+  useEffect(() => {
+    const client = getSupabaseBrowserClient();
+    if (!client) {
+      setIsAuthLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    client.auth.getSession().then(({ data }) => {
+      if (!isMounted) return;
+      setAuthUser(data.session?.user || null);
+      setAuthAccessToken(data.session?.access_token || null);
+      setIsAuthLoading(false);
+    });
+
+    const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user || null);
+      setAuthAccessToken(session?.access_token || null);
+    });
+
+    return () => {
+      isMounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadDailyData = async () => {
+      setIsDailyLoading(true);
+      setDailyError(null);
+
+      const response = await fetchDailyCues();
+      if (!isMounted) return;
+
+      if (response.success && response.items && response.brief) {
+        setDailyCueItems(response.items);
+        setDailyBrief(response.brief);
+        setDailyFeedMode(response.generatedFrom || "empty_live_sources");
+      } else {
+        setDailyError(response.error || "Daily Cue 暂时无法加载，已保留本地默认内容。");
+      }
+
+      setIsDailyLoading(false);
+    };
+
+    const loadDailyWorkCue = async () => {
+      setDailyWorkCueError(null);
+
+      const response = await fetchDailyWorkCue();
+      if (!isMounted) return;
+
+      if (response.success && response.item) {
+        setDailyWorkCue(response.item);
+      } else {
+        setDailyWorkCueError(response.error || "今日 Work Cue 暂时无法加载。");
+      }
+    };
+
+    loadDailyData();
+    loadDailyWorkCue();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const loadManagedSources = useCallback(async (): Promise<boolean> => {
+    setIsSourceLoading(true);
+    setSourceManagementError(null);
+    const response = await fetchManagedSources();
+
+    if (response.success && response.sources) {
+      setManagedSources(response.sources);
+      setSourceLastSyncedAt(new Date().toISOString());
+      setIsSourceLoading(false);
+      return true;
+    }
+
+    setSourceManagementError(response.error || "Source Management 暂时无法加载。");
+    setIsSourceLoading(false);
+    return false;
+  }, []);
+
+  useEffect(() => {
+    void loadManagedSources();
+  }, [loadManagedSources]);
+
   // Work Cue Form states
   const [chineseInput, setChineseInput] = useState("");
   const [scenario, setScenario] = useState<GenerateCueScenario>("Meeting");
@@ -76,37 +231,35 @@ export default function App() {
   const [bankSourceFilter, setBankSourceFilter] = useState<"all" | "daily" | "work">("all");
   const [bankStatusFilter, setBankStatusFilter] = useState<"all" | "unfinished" | "completed">("all");
 
-  // Load and merge initial cues from localStorage
+  // Load the local mirror first, then use the cloud profile userId as remote source of truth.
   useEffect(() => {
-    const stored = localStorage.getItem("pmcue_items");
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored) as CueItem[];
-        // To make sure any new updates to initial seed mock values also exist or are merged elegantly,
-        // we can identify cues from parsed. Any cue missing from parsed is appended.
-        const merged = [...parsed];
-        mockCues.forEach((mc) => {
-          if (!merged.some((item) => item.id === mc.id)) {
-            merged.push(mc);
-          }
-        });
-        setCues(merged);
-        localStorage.setItem("pmcue_items", JSON.stringify(merged));
-      } catch (e) {
-        console.error("Failed to parse local storage items", e);
-        setCues(mockCues);
-        localStorage.setItem("pmcue_items", JSON.stringify(mockCues));
+    const loadCueBank = async () => {
+      const localItems = loadCueBankFromStorage([]);
+      setCues(localItems);
+
+      if (!authAccessToken) {
+        setIsRemoteCueBankEnabled(false);
+        return;
       }
-    } else {
-      setCues(mockCues);
-      localStorage.setItem("pmcue_items", JSON.stringify(mockCues));
-    }
-  }, []);
+
+      const response = await fetchCueBankItems(authAccessToken);
+      setIsRemoteCueBankEnabled(Boolean(response.remoteEnabled));
+      if (response.success && response.remoteEnabled && response.items) {
+        const merged = mergeCueBankItemsById(localItems, response.items);
+        setCues(merged);
+        saveCueBankToStorage(merged);
+      } else if (!response.success) {
+        triggerToast(response.error || "云端 Cue Bank 暂时无法加载。", "error");
+      }
+    };
+
+    loadCueBank();
+  }, [authAccessToken]);
 
   // Save changes to localStorage whenever cues list changes
   const updateCuesInStateAndStore = (updatedList: CueItem[]) => {
     setCues(updatedList);
-    localStorage.setItem("pmcue_items", JSON.stringify(updatedList));
+    saveCueBankToStorage(updatedList);
 
     // Also sync currently opened modal cue to avoid stale context
     if (selectedCue) {
@@ -114,6 +267,37 @@ export default function App() {
       if (refreshed) {
         setSelectedCue(refreshed);
       }
+    }
+  };
+
+  const syncCueBankItem = async (item: CueItem) => {
+    if (!authAccessToken) {
+      setIsRemoteCueBankEnabled(false);
+      triggerToast("请先登录，再同步到云端 Cue Bank。", "info");
+      return;
+    }
+
+    const response = await saveCueBankItem(authAccessToken, item);
+    if (response.remoteEnabled) {
+      setIsRemoteCueBankEnabled(true);
+    }
+    if (response.remoteEnabled && !response.success) {
+      triggerToast("远程 Cue Bank 同步失败，本地已保存。", "error");
+    }
+  };
+
+  const syncCueBankDelete = async (id: string) => {
+    if (!authAccessToken) {
+      setIsRemoteCueBankEnabled(false);
+      return;
+    }
+
+    const response = await deleteCueBankItemFromRemote(authAccessToken, id);
+    if (response.remoteEnabled) {
+      setIsRemoteCueBankEnabled(true);
+    }
+    if (response.remoteEnabled && !response.success) {
+      triggerToast("远程 Cue Bank 删除失败，本地已更新。", "error");
     }
   };
 
@@ -128,11 +312,21 @@ export default function App() {
     }, 3200);
   };
 
+  useEffect(() => {
+    const authError = readSupabaseAuthErrorFromUrl();
+    if (!authError) return;
+
+    triggerToast(authError, "error");
+    window.history.replaceState(null, "", window.location.pathname || "/");
+  }, []);
+
   // State actions
   const handleToggleSave = (id: string, forceToast?: string) => {
     let message = "";
-    const updated = cues.map((item) => {
+    let didUpdateExisting = false;
+    let updated = cues.map((item) => {
       if (item.id === id) {
+        didUpdateExisting = true;
         const nextSavedState = !item.isSaved;
         message = nextSavedState ? "Saved to Cue Bank" : "Removed from Cue Bank";
         return { ...item, isSaved: nextSavedState };
@@ -140,7 +334,23 @@ export default function App() {
       return item;
     });
 
+    if (!didUpdateExisting) {
+      const dailyItem = dailyCueItems.find((item) => item.id === id);
+      if (dailyItem) {
+        updated = [{ ...buildCueFromDailyItem(dailyItem, cues), isSaved: true }, ...updated];
+        message = "Saved to Cue Bank";
+      }
+    }
+
     updateCuesInStateAndStore(updated);
+    const changed = updated.find((item) => item.id === id || item.dailyCueId === id);
+    if (changed) {
+      if (changed.isSaved) {
+        void syncCueBankItem(changed);
+      } else {
+        void syncCueBankDelete(changed.id);
+      }
+    }
     if (forceToast || message) {
       triggerToast(forceToast || message);
     }
@@ -148,8 +358,10 @@ export default function App() {
 
   const handleToggleDone = (id: string) => {
     let message = "";
-    const updated = cues.map((item) => {
+    let didUpdateExisting = false;
+    let updated = cues.map((item) => {
       if (item.id === id) {
+        didUpdateExisting = true;
         const nextDoneState = !item.isDone;
         message = nextDoneState ? "Marked as Practiced" : "Marked as Unfinished";
         return { ...item, isDone: nextDoneState };
@@ -157,7 +369,19 @@ export default function App() {
       return item;
     });
 
+    if (!didUpdateExisting) {
+      const dailyItem = dailyCueItems.find((item) => item.id === id);
+      if (dailyItem) {
+        updated = [{ ...buildCueFromDailyItem(dailyItem, cues), isDone: true }, ...updated];
+        message = "Marked as Practiced";
+      }
+    }
+
     updateCuesInStateAndStore(updated);
+    const changed = updated.find((item) => item.id === id || item.dailyCueId === id);
+    if (changed?.isSaved) {
+      void syncCueBankItem(changed);
+    }
     if (message) {
       triggerToast(message, "info");
     }
@@ -172,6 +396,7 @@ export default function App() {
       return item;
     });
     updateCuesInStateAndStore(updated);
+    void syncCueBankDelete(id);
     triggerToast("Removed from Cue Bank", "success");
   };
 
@@ -180,7 +405,92 @@ export default function App() {
     setIsModalOpen(true);
   };
 
+  const handleToggleSourcePanel = () => {
+    setIsSourcePanelOpen((current) => {
+      const next = !current;
+      if (next) {
+        void loadManagedSources();
+      }
+      return next;
+    });
+  };
+
+  const handleRefreshManagedSources = async () => {
+    const didLoad = await loadManagedSources();
+    triggerToast(
+      didLoad ? "Sources synced from Supabase" : "Source sync failed",
+      didLoad ? "success" : "error"
+    );
+  };
+
+  const handleRefreshDailyCues = async () => {
+    setIsDailyRefreshing(true);
+    setDailyError(null);
+    triggerToast("正在刷新 Daily Cue 真实来源...", "info");
+
+    const response = await refreshDailyCuesFromApi();
+
+    if (response.success && response.items && response.brief) {
+      setDailyCueItems(response.items);
+      setDailyBrief(response.brief);
+      setDailyFeedMode(response.generatedFrom || "empty_live_sources");
+      triggerToast("Daily Cue 已更新", "success");
+    } else {
+      setDailyError(response.error || "刷新失败，已保留上一版 Daily Cue。");
+      triggerToast("Daily Cue 刷新失败，已保留上一版内容", "error");
+    }
+
+    setIsDailyRefreshing(false);
+  };
+
+  const handleToggleManagedSource = async (sourceId: string, enabled: boolean) => {
+    setIsSourceSaving(true);
+    setSourceManagementError(null);
+    const previousSources = managedSources;
+    setManagedSources((current) =>
+      current.map((source) => (source.id === sourceId ? { ...source, enabled } : source))
+    );
+
+    const response = await updateManagedSourceEnabledFromApi(sourceId, enabled);
+    if (response.success && response.source) {
+      setManagedSources((current) =>
+        current.map((source) => (source.id === response.source?.id ? response.source : source))
+      );
+      triggerToast("Source setting updated", "success");
+    } else if (response.success) {
+      triggerToast("Source setting updated for local preview", "info");
+    } else {
+      setManagedSources(previousSources);
+      setSourceManagementError(response.error || "Source update failed.");
+      triggerToast("Source update failed", "error");
+      void loadManagedSources();
+    }
+
+    setIsSourceSaving(false);
+  };
+
   // AI Generator Submit handler
+  const handleCaptureClipboard = async () => {
+    try {
+      if (!navigator.clipboard?.readText) {
+        triggerToast("当前浏览器不支持读取剪贴板，请手动粘贴。", "info");
+        return;
+      }
+
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        triggerToast("剪贴板里没有可用文本。", "info");
+        return;
+      }
+
+      setChineseInput(text.trim());
+      triggerToast("已从剪贴板捕捉工作片段", "success");
+    } catch (error) {
+      console.warn("Clipboard capture failed:", error);
+      triggerToast("剪贴板权限受限，请手动粘贴内容。", "error");
+    }
+  };
+
   const handleGenerate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!chineseInput || !chineseInput.trim()) return;
@@ -221,22 +531,41 @@ export default function App() {
   };
 
   // Copied handler
-  const handleDirectCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    triggerToast("Copied to clipboard!", "success");
+  const handleDirectCopy = async (text: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        triggerToast("当前浏览器不支持直接复制，请手动选择文本复制。", "info");
+        return;
+      }
+
+      await navigator.clipboard.writeText(text);
+      triggerToast("Copied to clipboard!", "success");
+    } catch (error) {
+      console.error("Copy failed:", error);
+      triggerToast("复制失败，请手动选择文本复制。", "error");
+    }
   };
 
   // Speak pronunciation
   const handleSpeakExpression = (text: string) => {
-    if ("speechSynthesis" in window) {
+    try {
+      if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
+        triggerToast("当前浏览器不支持发音播放。", "info");
+        return;
+      }
+
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = "en-US";
       utterance.rate = 0.9;
+      utterance.onerror = () => {
+        triggerToast("发音播放失败，请稍后重试。", "error");
+      };
       window.speechSynthesis.speak(utterance);
       triggerToast("Playing pronunciation guide...", "info");
-    } else {
-      triggerToast("TTS Speech not supported in this browser.", "info");
+    } catch (error) {
+      console.error("Speech synthesis failed:", error);
+      triggerToast("发音播放失败，请稍后重试。", "error");
     }
   };
 
@@ -251,11 +580,26 @@ export default function App() {
   const learnedCount = cues.filter((item) => item.isDone).length;
 
   // Filter lists
-  // Daily Cues are precisely daily cards. Let's output original daily subset (the first 3 daily cards in mockup)
-  const dailyCards = cues.filter((mc) => mc.sourceType === "daily");
+  // Daily Cues are loaded from the P1 live feed API and can be cached server-side.
+  const dailyCards = useMemo(() => cues.filter((mc) => mc.sourceType === "daily"), [cues]);
   
-  // Seed the screen with exactly 3 default cards
-  const displayDailyCards = dailyCards.slice(0, 3);
+  const displayDailyCards = useMemo(
+    () =>
+      dailyCueItems.length > 0
+        ? dailyCueItems.map((item) => buildCueFromDailyItem(item, cues))
+        : dailyCards.slice(0, 3),
+    [cues, dailyCards, dailyCueItems]
+  );
+
+  const categoryCounts = useMemo(
+    () => getDailyCategoryCounts(dailyCueItems),
+    [dailyCueItems]
+  );
+
+  const filteredDisplayDailyCards = useMemo(
+    () => filterDailyCardsByCategory(displayDailyCards, dailyCueItems, dailyCategoryFilter),
+    [dailyCategoryFilter, dailyCueItems, displayDailyCards]
+  );
 
   // Cue Bank Cards: All items flagged as saved
   const savedCues = cues.filter((item) => item.isSaved);
@@ -271,57 +615,58 @@ export default function App() {
   });
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900 flex flex-col selection:bg-indigo-100 selection:text-indigo-950 antialiased">
+    <div className="min-h-screen bg-[#FAFBF9] font-sans text-slate-900 flex flex-col selection:bg-slate-200 selection:text-slate-950 antialiased">
       
       {/* Top Professional App Header */}
-      <header className="sticky top-0 z-40 bg-white/90 border-b border-slate-200/70 shadow-[0_2px_15px_-3px_rgba(99,102,241,0.03)] backdrop-blur-md px-4 sm:px-6 py-3.5">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <header className="sticky top-0 z-40 bg-white/95 border-b border-slate-200 shadow-[0_2px_15px_-3px_rgba(15,23,42,0.03)] backdrop-blur-md px-4 sm:px-6 py-3.5">
+        <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           
           {/* Logo & Brand Identity */}
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 flex items-center justify-center text-white shadow-md shadow-indigo-600/20 hover:scale-[1.03] active:scale-[0.98] transition-all duration-200 cursor-pointer">
-              <Sparkles className="w-5.5 h-5.5 text-white animate-pulse" />
+            <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center text-white shadow-sm hover:scale-[1.03] active:scale-[0.98] transition-all duration-200 cursor-pointer">
+              <Sparkles className="w-5 h-5 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-display font-extrabold text-xl tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-indigo-950">PM CUE</span>
-                <span className="text-[10px] font-mono tracking-widest bg-indigo-50 text-indigo-600 border border-indigo-200/50 rounded-md px-2 py-0.5 font-bold">MVP</span>
+                <span className="font-display font-extrabold text-xl tracking-tight text-slate-950">PM CUE</span>
+                <span className="text-[10px] font-mono tracking-widest bg-slate-100 text-slate-700 border border-slate-200 rounded-md px-2 py-0.5 font-bold">P1</span>
               </div>
-              <p className="text-[11px] text-slate-500 font-semibold tracking-wide uppercase">Work-Native PM English Expression Engine</p>
+              <p className="text-[11px] text-slate-500 font-semibold tracking-wide uppercase">AI-native PM English companion</p>
             </div>
           </div>
 
           {/* Active Navigation Tabs */}
-          <nav className="flex bg-slate-100/80 p-1.5 rounded-2xl self-start sm:self-center border border-slate-200/40" id="main-navigation">
+          <div className="flex flex-col md:flex-row md:items-center gap-3">
+          <nav className="flex bg-slate-100/80 p-1 rounded-lg self-start md:self-center border border-slate-200" id="main-navigation">
             <button
               onClick={() => setActiveTab("daily")}
-              className={`flex items-center gap-2 px-4.5 py-2 rounded-xl text-xs font-mono font-bold tracking-tight transition-all duration-150 cursor-pointer ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono font-bold tracking-tight transition-all duration-150 cursor-pointer ${
                 activeTab === "daily"
-                  ? "bg-white text-indigo-600 shadow-sm border border-slate-200/30"
+                  ? "bg-white text-slate-950 shadow-sm border border-slate-200"
                   : "text-slate-600 hover:text-slate-900 hover:bg-white/40"
               }`}
               id="nav-daily-tab"
             >
-              <BookOpen className={`w-4 h-4 transition-transform duration-250 ${activeTab === "daily" ? "text-indigo-650 scale-110" : "text-slate-500"}`} />
+              <BookOpen className={`w-4 h-4 transition-transform duration-250 ${activeTab === "daily" ? "text-slate-900 scale-110" : "text-slate-500"}`} />
               <span>Daily Cue</span>
             </button>
             <button
               onClick={() => setActiveTab("work")}
-              className={`flex items-center gap-2 px-4.5 py-2 rounded-xl text-xs font-mono font-bold tracking-tight transition-all duration-150 cursor-pointer ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono font-bold tracking-tight transition-all duration-150 cursor-pointer ${
                 activeTab === "work"
-                  ? "bg-white text-indigo-600 shadow-sm border border-slate-200/30"
+                  ? "bg-white text-slate-950 shadow-sm border border-slate-200"
                   : "text-slate-600 hover:text-slate-900 hover:bg-white/40"
               }`}
               id="nav-work-tab"
             >
-              <Zap className={`w-4 h-4 transition-transform duration-250 ${activeTab === "work" ? "text-amber-500 scale-110 animate-bounce" : "text-slate-500"}`} />
-              <span>Work Cue AI</span>
+              <Zap className={`w-4 h-4 transition-transform duration-250 ${activeTab === "work" ? "text-amber-500 scale-110" : "text-slate-500"}`} />
+              <span>Work Cue</span>
             </button>
             <button
               onClick={() => setActiveTab("bank")}
-              className={`flex items-center gap-2 px-4.5 py-2 rounded-xl text-xs font-mono font-bold tracking-tight transition-all duration-150 cursor-pointer relative ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono font-bold tracking-tight transition-all duration-150 cursor-pointer relative ${
                 activeTab === "bank"
-                  ? "bg-white text-indigo-600 shadow-sm border border-slate-200/30"
+                  ? "bg-white text-slate-950 shadow-sm border border-slate-200"
                   : "text-slate-600 hover:text-slate-900 hover:bg-white/40"
               }`}
               id="nav-bank-tab"
@@ -335,6 +680,13 @@ export default function App() {
               )}
             </button>
           </nav>
+            <AuthMenu
+              user={authUser}
+              isLoading={isAuthLoading}
+              onAuthError={(message) => triggerToast(message, "error")}
+              onAuthSuccess={(message) => triggerToast(message, "success")}
+            />
+          </div>
         </div>
       </header>
 
@@ -344,57 +696,154 @@ export default function App() {
         {/* VIEW 1: DAILY CUE PAGE */}
         {activeTab === "daily" && (
           <div className="space-y-6" id="daily-view-container">
-            {/* Value / Onboarding Banner (First 10s Understanding requirement) */}
-            <div className="bg-slate-950 text-white rounded-2xl p-6 md:p-8 border border-slate-800 shadow-[0_12px_45px_-8px_rgba(0,0,0,0.18)] relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-              <div className="absolute -right-20 -top-20 w-96 h-96 bg-gradient-to-br from-indigo-500/20 via-violet-500/5 to-transparent rounded-full blur-3xl -z-10" />
-              <div className="absolute -left-20 -bottom-20 w-80 h-80 bg-gradient-to-tr from-indigo-600/10 to-transparent rounded-full blur-3xl -z-10" />
-              
-              <div className="space-y-3 max-w-2xl">
-                <span className="text-[10px] font-mono uppercase bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-3 py-1 rounded-md font-extrabold tracking-wider inline-block">
-                  🎯 Product value in 10s
-                </span>
-                <h1 className="text-2xl md:text-3.5xl font-display font-extrabold tracking-tight text-white leading-tight">
-                  Stop translated English. Speak <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-violet-400 to-indigo-200 underline decoration-indigo-500 decoration-2 underline-offset-4">Work-Native</span> PM terms.
-                </h1>
-                <p className="text-slate-400 text-sm md:text-base font-sans max-w-xl leading-relaxed">
-                  Turn stiff literal phrases into authentic Silicon Valley expressions. Practice and save expressions instantly to built your high-activation playbook.
+            {/* Daily Brief Module */}
+            <section className="bg-white border border-slate-200 rounded-xl p-5 md:p-7 shadow-[0_8px_28px_rgba(15,23,42,0.04)] space-y-5">
+              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
+                <div className="space-y-3 max-w-4xl">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-[10px] font-mono uppercase bg-slate-950 text-white border border-slate-800 px-2.5 py-1 rounded-md font-extrabold tracking-wider">
+                      <BookOpen className="w-3.5 h-3.5 text-amber-300" />
+                      Daily Intel Summary
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-500 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-md">
+                      {dailyCueItems.length || 10}+ signals
+                    </span>
+                    <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-md">
+                      Beijing 24:00 refresh
+                    </span>
+                  </div>
+                  <h1 className="text-2xl md:text-3xl font-display font-extrabold tracking-tight text-slate-950 leading-tight">
+                    今天产品经理最值得关注的 AI / Product 信号
+                  </h1>
+                  <p className="text-slate-700 text-sm md:text-base font-sans max-w-3xl leading-relaxed">
+                    {dailyBrief?.summary || "每天从专业来源筛选前沿动态，帮你快速判断哪些变化会影响产品策略、用户工作流和英文表达积累。"}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 min-w-full sm:min-w-[300px] lg:min-w-[320px]">
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                    <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest block font-bold">{getFormattedDate()}</span>
+                    <span className="text-2xl font-display font-extrabold text-slate-950 block leading-none mt-1">
+                      {learnedCount}
+                    </span>
+                    <span className="text-xs text-slate-500 block mt-1.5 font-semibold">practiced cues</span>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-100 rounded-lg p-3.5">
+                    <span className="text-[10px] font-mono text-amber-700 uppercase tracking-widest block font-bold">Feed</span>
+                    <span className="text-2xl font-display font-extrabold text-slate-950 block leading-none mt-1">
+                      {displayDailyCards.length}
+                    </span>
+                    <span className="text-xs text-amber-800/70 block mt-1.5 font-semibold">
+                      {dailyFeedMode ? feedModeLabels[dailyFeedMode] : "available today"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4 border-t border-slate-100">
+                <p className="text-[11px] text-slate-500 font-mono leading-relaxed">
+                  {dailyBrief
+                    ? `Updated ${new Date(dailyBrief.lastUpdatedAt).toLocaleString()} · Next ${new Date(dailyBrief.nextRefreshAt).toLocaleString()}`
+                    : "Waiting for live source refresh."}
                 </p>
+                <button
+                  type="button"
+                  onClick={handleRefreshDailyCues}
+                  disabled={isDailyRefreshing}
+                  className="w-full sm:w-auto text-xs font-mono bg-slate-950 text-white hover:bg-slate-800 disabled:opacity-60 disabled:cursor-wait px-3.5 py-2 rounded-lg border border-slate-900 font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isDailyRefreshing ? "animate-spin" : ""}`} />
+                  <span>{isDailyRefreshing ? "Refreshing feed" : "Sync latest signals"}</span>
+                </button>
               </div>
+            </section>
 
-              {/* Lightweight Stats counter */}
-              <div className="flex items-center gap-4 bg-white/[0.04] backdrop-blur-md p-4.5 rounded-2xl border border-white/10 min-w-[210px] shadow-[inset_0_1px_1.5px_rgba(255,255,255,0.06)]" id="learning-summary-widget">
-                <div className="p-3 bg-indigo-600/20 text-indigo-400 border border-indigo-500/25 rounded-xl">
-                  <Calendar className="w-5.5 h-5.5 text-indigo-400" />
-                </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleToggleSourcePanel}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-mono font-bold text-slate-700 shadow-xs transition-all hover:border-slate-300 hover:text-slate-950"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+                {isSourcePanelOpen ? "Hide sources" : "Manage sources"}
+              </button>
+            </div>
+
+            {isSourcePanelOpen && (
+              <SourceManagementPanel
+                sources={managedSources}
+                categoryLabels={categoryLabels}
+                isLoading={isSourceLoading}
+                isSaving={isSourceSaving}
+                isDailyRefreshing={isDailyRefreshing}
+                error={sourceManagementError}
+                lastSyncedAt={sourceLastSyncedAt}
+                onToggleSource={handleToggleManagedSource}
+                onRefreshSources={handleRefreshManagedSources}
+                onRefreshDailyCues={handleRefreshDailyCues}
+              />
+            )}
+
+            {/* Daily Feed Controls */}
+            <div className="flex flex-col gap-3 pt-2">
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
                 <div>
-                  <span className="text-[10px] font-mono text-indigo-300 uppercase tracking-widest block font-bold">{getFormattedDate()}</span>
-                  <span className="text-2xl font-display font-extrabold text-white block leading-none mt-1">
-                    {learnedCount} Cues
-                  </span>
-                  <span className="text-xs text-slate-400 block mt-1.5 font-semibold font-mono">accomplished today</span>
+                  <h2 className="text-xl font-display font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+                    <PlayCircle className="w-5.5 h-5.5 text-slate-800" />
+                    Today's PM Signal Feed
+                  </h2>
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">
+                    真实来源 + PM English cue + 可保存练习
+                  </p>
                 </div>
+                <span className="text-xs font-mono bg-white text-slate-600 px-3 py-1.5 rounded-md border border-slate-200 font-bold self-start sm:self-auto">
+                  Showing {filteredDisplayDailyCards.length} / {displayDailyCards.length}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setDailyCategoryFilter("all")}
+                  className={`px-3 py-1.5 text-xs font-mono font-bold rounded-lg border transition-all cursor-pointer ${
+                    dailyCategoryFilter === "all"
+                      ? "bg-slate-950 border-slate-950 text-white"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  All ({displayDailyCards.length})
+                </button>
+                {(Object.keys(categoryLabels) as SourceCategoryId[]).map((categoryId) => {
+                  const count = categoryCounts.get(categoryId) || 0;
+                  return (
+                    <button
+                      key={categoryId}
+                      type="button"
+                      onClick={() => setDailyCategoryFilter(categoryId)}
+                      disabled={count === 0}
+                      className={`px-3 py-1.5 text-xs font-mono font-bold rounded-lg border transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                        dailyCategoryFilter === categoryId
+                          ? "bg-slate-950 border-slate-950 text-white"
+                          : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      {categoryLabels[categoryId]} ({count})
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Daily Card Deck Title */}
-            <div className="flex items-center justify-between pt-4">
-              <div>
-                <h2 className="text-xl font-display font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-                  <PlayCircle className="w-5.5 h-5.5 text-indigo-600" />
-                  Today's Daily PM Expressions
-                </h2>
-                <p className="text-xs text-slate-500 font-mono mt-0.5">Exactly 3 pre-loaded dynamic cues for deep integration</p>
+            {dailyError && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-xs font-sans flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{dailyError}</span>
               </div>
-              <span className="text-xs font-mono bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-md border border-indigo-150/45 font-bold">
-                100% Focused
-              </span>
-            </div>
+            )}
 
-            {/* Exactly 3 preloaded cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5" id="daily-cards-deck">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5" id="daily-cards-deck">
               {isDailyLoading ? (
-                // 3-card loading state with explicit animate-pulse matching normal state heights
-                Array.from({ length: 3 }).map((_, idx) => (
+                Array.from({ length: 6 }).map((_, idx) => (
                   <div
                     key={`daily-skeleton-${idx}`}
                     className="bg-white rounded-2xl border border-slate-200 p-0 flex flex-col justify-between overflow-hidden animate-pulse min-h-[380px] shadow-xs"
@@ -439,27 +888,34 @@ export default function App() {
                   </div>
                 ))
               ) : (
-                displayDailyCards.map((cue) => {
+                filteredDisplayDailyCards.map((cue) => {
                   // Inline check for custom helper
                   const getSStyle = (scen: string) => {
                     const l = scen.toLowerCase();
-                    if (l.includes("prd") || l.includes("review")) return "bg-rose-50 text-rose-700 border-rose-200";
-                    if (l.includes("stakeholder") || l.includes("update")) return "bg-indigo-50 text-indigo-700 border-indigo-200";
+                    if (l.includes("prd") || l.includes("review")) return "bg-rose-50 text-rose-700 border-rose-100";
+                    if (l.includes("stakeholder") || l.includes("update")) return "bg-emerald-50 text-emerald-700 border-emerald-100";
                     if (l.includes("meeting")) return "bg-sky-50 text-sky-700 border-sky-200";
-                    return "bg-amber-50 text-amber-700 border-amber-200";
+                    return "bg-amber-50 text-amber-700 border-amber-100";
                   };
+                  const sourceDailyItem = dailyCueItems.find((item) => item.id === cue.dailyCueId || item.id === cue.id);
+                  const categoryLabel = sourceDailyItem ? categoryLabels[sourceDailyItem.categoryId] : "Daily";
                   return (
                     <div
                       key={cue.id}
-                      className="group bg-white rounded-2xl border border-slate-200/90 hover:border-indigo-300 transition-all duration-300 hover:shadow-[0_12px_30px_rgba(99,102,241,0.06)] hover:-translate-y-0.5 flex flex-col justify-between overflow-hidden vibrant-glow-card"
+                      className="group bg-white rounded-xl border border-slate-200 hover:border-slate-400 transition-all duration-200 hover:shadow-[0_14px_32px_rgba(15,23,42,0.06)] flex flex-col justify-between overflow-hidden"
                       id={`daily-card-${cue.id}`}
                     >
                       {/* Card Head */}
                       <div className="p-5 space-y-4">
                         <div className="flex items-center justify-between">
-                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-0.5 rounded border ${getSStyle(cue.scenario)}`}>
-                            {cue.scenario}
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-md border ${getSStyle(cue.scenario)}`}>
+                              {cue.scenario}
+                            </span>
+                            <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-md">
+                              {categoryLabel}
+                            </span>
+                          </div>
                           
                           {/* Interactive Status Indicator */}
                           {cue.isDone && (
@@ -470,26 +926,36 @@ export default function App() {
                           )}
                         </div>
 
-                        <h3 className="text-base font-display font-bold text-slate-900 tracking-tight leading-snug group-hover:text-indigo-650 transition-colors line-clamp-2">
-                          {cue.title}
-                        </h3>
-
                         <div className="space-y-1.5">
-                          <div className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-bold">Chinese Context</div>
-                          <p className="text-slate-600 text-xs font-sans line-clamp-2 italic leading-relaxed">
-                            "{cue.chineseExplanation}"
-                          </p>
+                          <div className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-extrabold flex items-center gap-1">
+                            <span>中文速览</span>
+                            <span className="flex h-1.5 w-1.5 rounded-full bg-amber-500" />
+                          </div>
+                          <h3 className="text-slate-950 font-display font-extrabold text-[18px] leading-snug tracking-tight line-clamp-2 group-hover:text-slate-700 transition-colors">
+                            {cue.title}
+                          </h3>
                         </div>
 
-                        <hr className="border-slate-100" />
+                        <div className="flex flex-wrap gap-1.5 items-center">
+                          {cue.phrases.slice(0, 3).map((phrase) => (
+                            <span
+                              key={phrase}
+                              className="text-[10px] font-sans font-medium px-2 py-0.5 bg-slate-50 border border-slate-200 text-slate-600 rounded"
+                            >
+                              {phrase}
+                            </span>
+                          ))}
+                        </div>
 
-                        <div className="space-y-1.5">
-                          <div className="text-[10px] font-mono text-indigo-600 uppercase tracking-widest font-extrabold flex items-center gap-1">
-                            <span>English Expression</span>
-                            <span className="flex h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                          </div>
-                          <p className="text-slate-950 font-display font-extrabold text-[17px] leading-relaxed tracking-tight line-clamp-3 group-hover:text-indigo-900 transition-colors">
-                            {cue.englishOutput}
+                        <div className="space-y-2 border-t border-slate-100 pt-3">
+                          <p className="text-[10px] font-mono text-slate-400 uppercase tracking-widest font-extrabold">
+                            PM English cue
+                          </p>
+                          <p className="text-sm font-display font-bold text-slate-900 tracking-tight leading-snug line-clamp-3">
+                            “{cue.englishOutput}”
+                          </p>
+                          <p className="text-slate-600 text-xs font-sans line-clamp-3 leading-relaxed">
+                            {cue.chineseExplanation}
                           </p>
                         </div>
                       </div>
@@ -497,14 +963,22 @@ export default function App() {
                       {/* Card Footer Actions */}
                       <div className="bg-slate-50/70 border-t border-slate-100 p-4 flex items-center justify-between gap-3">
                         {/* Left: View Details link */}
-                        <button
-                          onClick={() => openCueDetail(cue)}
-                          className="flex items-center gap-1 text-xs font-mono font-bold text-slate-700 hover:text-indigo-650 transition-colors py-1 cursor-pointer"
-                          id={`btn-view-${cue.id}`}
-                        >
-                          <span>Learn details</span>
-                          <ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-1 duration-200" />
-                        </button>
+                        <div className="min-w-0">
+                          {cue.sourceRef ? (
+                            <a
+                              href={cue.sourceRef.sourceUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(event) => event.stopPropagation()}
+                              className="inline-flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-500 hover:text-slate-900 transition-colors max-w-full"
+                            >
+                              <ExternalLink className="w-3 h-3 shrink-0" />
+                              <span className="truncate">{cue.sourceRef.sourceName}</span>
+                            </a>
+                          ) : (
+                            <span className="text-[10px] font-mono text-slate-400">PM Cue</span>
+                          )}
+                        </div>
 
                         {/* Right: Save/Bookmark button */}
                         <div className="flex items-center gap-1.5">
@@ -534,6 +1008,14 @@ export default function App() {
                               <Bookmark className="w-4 h-4" />
                             )}
                           </button>
+                          <button
+                            onClick={() => openCueDetail(cue)}
+                            className="p-1.5 rounded-md border bg-slate-950 text-white border-slate-950 hover:bg-slate-800 transition-all cursor-pointer"
+                            id={`btn-view-${cue.id}`}
+                            title="Learn details"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -541,9 +1023,9 @@ export default function App() {
                 })
               )}
 
-              {!isDailyLoading && displayDailyCards.length === 0 && (
+              {!isDailyLoading && filteredDisplayDailyCards.length === 0 && (
                 <div className="col-span-3 text-center p-12 bg-white rounded-2xl border border-slate-200">
-                  <p className="text-slate-400 font-mono italic">No Daily Cue yet.</p>
+                  <p className="text-slate-400 font-mono italic">No Daily Cue yet. Try refreshing the feed.</p>
                 </div>
               )}
             </div>
@@ -565,318 +1047,33 @@ export default function App() {
                   Maximize Your MVP Loop Setup
                 </h3>
                 <p className="text-xs text-slate-650 font-sans leading-relaxed">
-                  Go ahead and click any card to try the **Continuous Practice** oral simulator, then jump over to **Work Cue AI** to translate your own real-life thoughts using our intelligent contextual translation models!
+                  Go ahead and click any card to try the **Continuous Practice** oral simulator, then jump over to **Work Cue** to translate your own real-life thoughts using our intelligent contextual translation models!
                 </p>
               </div>
             </div>
           </div>
         )}        {/* VIEW 2: WORK CUE GENERATOR */}
         {activeTab === "work" && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8" id="work-view-container">
-            
-            {/* Left Column: Form entry */}
-            <div className="lg:col-span-5 space-y-6">
-              <div className="space-y-1">
-                <h2 className="text-xl font-display font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-                  <Sparkles className="w-5.5 h-5.5 text-indigo-500 fill-indigo-500 animate-pulse" />
-                  Contextual Work Cue Generator
-                </h2>
-                <p className="text-xs text-slate-500 font-mono">Convert raw product concepts/thoughts into powerful professional English.</p>
-              </div>
-
-              {/* Formulation Box */}
-              <form onSubmit={handleGenerate} className="bg-white rounded-2xl border border-slate-200/90 p-6 space-y-6 shadow-[0_8px_30px_rgba(99,102,241,0.02)]" id="cue-generator-form">
-                
-                {/* Chinese input area */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-mono font-bold uppercase tracking-wider text-slate-700 font-bold" htmlFor="chineseThought">
-                      PM Thought in Chinese (中文思路)
-                    </label>
-                    <span className="text-[10px] font-mono text-slate-400">Avoid formal dictionary translation</span>
-                  </div>
-                  <textarea
-                    id="chineseThought"
-                    value={chineseInput}
-                    onChange={(e) => setChineseInput(e.target.value)}
-                    placeholder="e.g. 这个需求其实没那么急，不用现在塞进去，免得打乱当前的计划..."
-                    className="w-full min-h-[140px] px-4 py-3 bg-slate-50/80 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm font-sans transition-all leading-relaxed placeholder:text-slate-400 outline-none"
-                    disabled={isGenerating}
-                  />
-                </div>
-
-                {/* Scenario Selector */}
-                <div className="space-y-2">
-                  <label className="text-xs font-mono font-bold uppercase tracking-wider text-slate-700 block font-bold">
-                    Choose Targeted Scenario (应用场景)
-                  </label>
-                  <div className="grid grid-cols-3 gap-2" id="scenario-selector-grid">
-                    {GENERATE_CUE_SCENARIOS.map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() => setScenario(tag)}
-                        className={`px-3 py-3 rounded-xl text-xs font-mono font-extrabold text-center border transition-all cursor-pointer ${
-                          scenario === tag
-                            ? "bg-slate-900 text-white border-slate-900 shadow-sm"
-                            : "bg-slate-50 text-slate-600 border-slate-200/80 hover:bg-white hover:text-indigo-600 hover:border-indigo-300"
-                        }`}
-                        id={`scenario-tag-${tag.replace(" ", "")}`}
-                        disabled={isGenerating}
-                      >
-                        {tag === "Meeting" && "🎙️ Meeting"}
-                        {tag === "PRD Review" && "📝 PRD Review"}
-                        {tag === "Stakeholder Update" && "🤝 Stakeholder"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Generation CTA Button */}
-                <button
-                  type="submit"
-                  disabled={isGenerating || !chineseInput.trim()}
-                  className={`w-full py-4 px-4 rounded-xl text-xs font-mono font-extrabold tracking-wider uppercase transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
-                    !chineseInput.trim()
-                      ? "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-50"
-                      : isGenerating
-                      ? "bg-indigo-600 text-white border border-transparent cursor-wait animate-pulse"
-                      : "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-[0_4px_20px_rgba(99,102,241,0.2)]"
-                  }`}
-                  id="btn-generate-cue"
-                >
-                  {isGenerating ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      <span>Processing raw thought...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4" />
-                      <span>Generate Core PM Cue</span>
-                    </>
-                  )}
-                </button>
-              </form>
-
-              {/* Custom validation feedback or hints */}
-              <div className="bg-indigo-50/50 border border-indigo-150 p-4.5 rounded-2xl text-xs text-slate-650 font-sans space-y-1.5 shadow-[0_4px_12px_rgba(99,102,241,0.01)]">
-                <span className="font-mono font-extrabold block text-indigo-900 flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
-                  💡 Dynamic Cue Tip:
-                </span>
-                <p className="leading-relaxed">
-                  Slightly explain safety limits, parameters, resources, or timing in your Chinese thought to prompt the model into creating Silicon Valley style expressions containing terms like **"critical path"**, **"safeguard deliverables"**, or **"onboarding latency"**.
-                </p>
-              </div>
-            </div>
-
-            {/* Right Column: Production Output & Sandbox */}
-            <div className="lg:col-span-7 flex flex-col justify-start">
-              
-              {/* Skeleton Screen or Loading Indicator state */}
-              {isGenerating && (
-                <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-6 h-full min-h-[460px] flex flex-col justify-between shadow-xs" id="generator-skeleton-state">
-                  <div className="space-y-6">
-                    {/* Header spinner */}
-                    <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100 animate-pulse">
-                      <div className="w-4 h-4 bg-slate-200 rounded" />
-                      <div className="h-4 bg-slate-205 rounded w-1/4" />
-                    </div>
-                    {/* Skeleton 3 lines */}
-                    <div className="space-y-3 pt-3">
-                      <div className="h-4 bg-slate-100 rounded w-2/5 animate-pulse" />
-                      <div className="space-y-2">
-                        <div className="h-7 bg-slate-100 rounded w-full animate-pulse" />
-                        <div className="h-7 bg-slate-100 rounded w-5/6 animate-pulse" />
-                      </div>
-                    </div>
-                    <div className="space-y-3 pt-2">
-                      <div className="h-4 bg-slate-100 rounded w-1/4 animate-pulse" />
-                      <div className="flex gap-2">
-                        <div className="h-7 bg-slate-100 rounded-md w-24 animate-pulse" />
-                        <div className="h-7 bg-slate-100 rounded-md w-32 animate-pulse" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100/65 text-center flex flex-col items-center justify-center gap-1 shadow-inner">
-                    <span className="text-[10px] font-mono text-indigo-600 font-bold tracking-widest uppercase">LIVE AI TRANSCRIPTION SERVICE</span>
-                    <p className="text-sm font-sans font-extrabold color-pulsing-text">Turning your work thought into PM English...</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Error state */}
-              {generationError && !isGenerating && (
-                <div className="bg-white rounded-2xl border border-red-200 p-8 text-center space-y-5 shadow-xs h-full min-h-[460px] flex flex-col justify-center items-center" id="generator-error-state">
-                  <div className="w-16 h-16 rounded-full bg-red-50 text-red-500 flex items-center justify-center border border-red-100">
-                    <AlertTriangle className="w-8 h-8" />
-                  </div>
-                  <div className="space-y-2 max-w-md">
-                    <h3 className="font-display font-extrabold text-slate-900 text-lg">AI Generation Failed</h3>
-                    <p className="text-sm text-slate-500 font-sans leading-relaxed">
-                      {generationError}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleGenerate()}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-mono font-bold transition-all mx-auto cursor-pointer shadow-[0_4px_12px_rgba(99,102,241,0.2)]"
-                    id="btn-retry-generation"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                    <span>Retry Generation</span>
-                  </button>
-
-                  <p className="text-[10px] text-slate-400 font-mono max-w-sm">
-                    In mock mode, a local failover system is used automatically if the API key is not configured.
-                  </p>
-                </div>
-              )}
-
-              {/* Initial Normal state (Blank state prior to generation) */}
-              {!isGenerating && !generationError && !latestGeneratedCue && (
-                <div className="bg-white rounded-2xl border border-dashed border-indigo-250 p-12 text-center space-y-5 h-full min-h-[460px] flex flex-col justify-center items-center shadow-xs bg-gradient-to-br from-white to-slate-50/40 relative overflow-hidden" id="generator-initial-state">
-                  <div className="absolute -right-20 -top-20 w-60 h-60 bg-indigo-500/5 rounded-full blur-2xl" />
-                  <div className="w-14 h-14 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100 animate-pulse">
-                    <Sparkles className="w-6 h-6" />
-                  </div>
-                  <div className="space-y-1.5 max-w-sm">
-                    <h3 className="font-display font-bold text-slate-900 text-base tracking-tight leading-tight">Perfect expression, zero latency</h3>
-                    <p className="text-xs text-slate-650 font-sans leading-relaxed">
-                      Input your direct workspace point of view in Chinese on the left side, select a functional scenario, and click **Generate** to reveal its professional counterpart.
-                    </p>
-                  </div>
-                  <div className="inline-flex items-center gap-1.5 text-[10px] font-mono font-bold text-indigo-600 bg-indigo-50 px-3.5 py-1.5 rounded-lg border border-indigo-150">
-                    🪄 Runs fully contextual PM English models
-                  </div>
-                </div>
-              )}
-
-              {/* Normal State: Output Successful Cue display */}
-              {!isGenerating && !generationError && latestGeneratedCue && (
-                <div className="bg-white rounded-2xl border border-indigo-150/90 p-6.5 space-y-6 flex flex-col justify-between h-full min-h-[460px] shadow-[0_12px_40px_rgba(99,102,241,0.06)] relative overflow-hidden vibrant-glow-card" id="generator-output-state">
-                  
-                  {/* Output Header */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 bg-indigo-50 text-indigo-750 rounded-md border border-indigo-200/50">
-                          {latestGeneratedCue.scenario}
-                        </span>
-                        <span className="text-[10px] font-mono text-slate-400">•</span>
-                        <span className="text-[10px] font-mono text-indigo-600 uppercase font-extrabold flex items-center gap-1">
-                          <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                          Generated Cue
-                        </span>
-                      </div>
-                      
-                      {/* Pronounce link top right */}
-                      <button
-                        type="button"
-                        onClick={() => handleSpeakExpression(latestGeneratedCue.englishOutput)}
-                        className="flex items-center gap-1.5 px-3 py-1 text-xs font-mono font-bold text-indigo-650 hover:text-indigo-850 hover:bg-indigo-50/50 rounded-md transition-all border border-indigo-100 cursor-pointer"
-                        title="Listen pronunciation"
-                      >
-                        <Volume2 className="w-3.5 h-3.5 text-indigo-500" />
-                        <span>Pronounce</span>
-                      </button>
-                    </div>
-
-                    {/* Output Card Core Title */}
-                    <div>
-                      <h3 className="text-base font-display font-extrabold text-slate-900 leading-tight">
-                        {latestGeneratedCue.title}
-                      </h3>
-                      <p className="text-[11px] text-slate-400 font-mono mt-0.5">Synthesized via professional guidelines</p>
-                    </div>
-
-                    {/* Core Generated Output */}
-                    <div className="p-5.5 bg-gradient-to-br from-indigo-50/45 to-violet-50/20 rounded-xl border border-indigo-100/90 relative group shadow-inner">
-                      <span className="text-[10px] font-bold text-indigo-650 uppercase tracking-widest font-mono block mb-2">Work-Native Expression (专业地道口语)</span>
-                      
-                      <p className="text-slate-950 font-display font-extrabold text-[18px] leading-relaxed pr-10 text-slate-950 tracking-tight">
-                        {latestGeneratedCue.englishOutput}
-                      </p>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDirectCopy(latestGeneratedCue.englishOutput)}
-                        className="absolute right-4 top-4 p-2.5 rounded-lg bg-white hover:bg-slate-50 text-indigo-650 hover:text-indigo-805 shadow-sm transition-all border border-indigo-100 cursor-pointer"
-                        title="Copy text of expression"
-                        id="output-copy-pinnable"
-                      >
-                        <Copy className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    {/* Keywords Tagging */}
-                    <div className="space-y-2">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono block">Keyword Phrases (核心表达词块)</span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {latestGeneratedCue.phrases.map((ph, tagIdx) => (
-                          <span
-                            key={tagIdx}
-                            className="bg-slate-50 text-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono font-bold border border-slate-200"
-                          >
-                            ⭐ {ph}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <hr className="border-slate-100" />
-
-                    {/* Speaking prompt */}
-                    <div className="space-y-1 bg-gradient-to-br from-violet-50/30 to-slate-50/50 p-4.5 rounded-xl border border-violet-100/40 shadow-xs">
-                      <span className="text-[10px] font-bold text-indigo-750 uppercase tracking-widest font-mono block">Simulated Practice Prompt</span>
-                      <p className="text-xs font-sans font-medium text-slate-700 italic leading-relaxed">
-                        "{latestGeneratedCue.speakingPrompt}"
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Actions Bar */}
-                  <div className="flex items-center justify-between gap-4 pt-4 border-t border-slate-100 bg-slate-50/55 p-4 -mx-6.5 -mb-6.5 rounded-b-2xl">
-                    <button
-                      type="button"
-                      onClick={() => openCueDetail(latestGeneratedCue)}
-                      className="px-4 py-2.5 border border-slate-250 hover:bg-slate-100 text-slate-800 font-mono text-xs font-bold rounded-xl transition-all cursor-pointer"
-                      id="output-learn-more"
-                    >
-                      Open Full Trainer
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleToggleSave(latestGeneratedCue.id, "Saved to Cue Bank")}
-                      className={`flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-mono font-bold uppercase transition-all cursor-pointer ${
-                        cues.find((i) => i.id === latestGeneratedCue.id)?.isSaved
-                          ? "bg-amber-50 text-amber-850 border border-amber-350"
-                          : "bg-indigo-650 text-white hover:bg-indigo-700 hover:shadow-[0_4px_12px_rgba(99,102,241,0.2)]"
-                      }`}
-                      id="output-save-bank"
-                    >
-                      {cues.find((i) => i.id === latestGeneratedCue.id)?.isSaved ? (
-                        <>
-                          <BookmarkCheck className="w-4 h-4 text-amber-650" />
-                          <span>Saved correctly</span>
-                        </>
-                      ) : (
-                        <>
-                          <Bookmark className="w-4 h-4 text-white" />
-                          <span>Save to Cue Bank</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-
-                </div>
-              )}
-
-            </div>
-          </div>
+          <WorkCuePanel
+            dailyWorkCue={dailyWorkCue}
+            dailyWorkCueError={dailyWorkCueError}
+            chineseInput={chineseInput}
+            scenario={scenario}
+            isGenerating={isGenerating}
+            generationError={generationError}
+            latestGeneratedCue={latestGeneratedCue}
+            isLatestGeneratedCueSaved={Boolean(
+              latestGeneratedCue && cues.find((item) => item.id === latestGeneratedCue.id)?.isSaved
+            )}
+            onChineseInputChange={setChineseInput}
+            onScenarioChange={setScenario}
+            onCaptureClipboard={handleCaptureClipboard}
+            onGenerate={handleGenerate}
+            onSpeakExpression={handleSpeakExpression}
+            onDirectCopy={handleDirectCopy}
+            onOpenCueDetail={openCueDetail}
+            onSaveGeneratedCue={(id) => handleToggleSave(id, "Saved to Cue Bank")}
+          />
         )}
 
 
@@ -896,7 +1093,14 @@ export default function App() {
 
               {/* Learning stats summary inside bank */}
               <div className="text-xs font-mono bg-slate-50 text-slate-800 border border-slate-200 rounded-md px-3.5 py-2">
-                📂 Total Cards: <strong className="text-sm font-sans">{savedCues.length} items</strong> saved in permanent local storage
+                Total Cards: <strong className="text-sm font-sans">{savedCues.length} items</strong>
+                <span className="ml-2 text-slate-500">
+                  {authUser
+                    ? isRemoteCueBankEnabled
+                      ? "Supabase sync"
+                      : "signed in"
+                    : "local preview"}
+                </span>
               </div>
             </div>
 

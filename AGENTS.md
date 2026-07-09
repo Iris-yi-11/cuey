@@ -22,25 +22,33 @@ Read these before coding:
 - `server.ts`
 - `src/types.ts`
 - `src/data/mockCues.ts`
+- `src/data/sourceAllowlist.ts`
+- `src/services/geminiCueService.ts`
+- `src/services/dailyCueService.ts`
+- `src/services/sourceManagementRepository.ts`
+- `src/services/cueBankRepository.ts`
 
 ## MVP Scope
 
 In scope:
 
-- Daily Cue tab with 3 curated cards
-- Work Cue AI generation flow
+- Daily Cue tab with 10+ live curated AI/Product/SaaS source cards when sources are available
+- Source Management Lite with Supabase-backed source sync, source toggles, and feed refresh
+- Work Cue AI generation flow through real Gemini only
+- Daily Work Cue date-based prompt
 - Cue Detail Trainer modal
-- Cue Bank with save, filter, copy, listen, and practice status
-- Local persistence with `localStorage`
-- Server-side Gemini API route with mock fallback
+- Cue Bank with save, filter, copy, listen, practice status, and Supabase Auth user sync
+- `localStorage` is only a UI mirror / preview fallback, not the production source of truth
+- Server-side Gemini API route with no mock AI success path
 
 ## Non-Goals
 
 - Do not add authentication unless requested.
-- Do not add a database before the data migration plan is approved.
 - Do not add payments, subscriptions, social sharing, teams, or analytics dashboards.
 - Do not redesign the approved UI without explicit product approval.
 - Do not replace the current app architecture with a new framework.
+- Do not add a full source-management admin dashboard unless explicitly requested.
+- Do not add automatic screen/OCR monitoring.
 
 ## Tech Stack
 
@@ -50,6 +58,7 @@ In scope:
 - Tailwind CSS 4
 - Express
 - `@google/genai`
+- Supabase REST API
 - `lucide-react`
 - `motion/react`
 
@@ -76,7 +85,10 @@ In scope:
 │   ├── types.ts
 │   ├── components/
 │   ├── data/
+│   ├── utils/
 │   └── services/
+├── api/
+├── desktop/
 └── assets/
 ```
 
@@ -121,7 +133,9 @@ For Cue Bank, preserve:
 - Use deployment platform secret management in production.
 - `.env.example` documents required variable names only.
 - `GEMINI_API_KEY` is required for real AI generation.
-- Mock behavior currently exists in code and must remain available for local demos.
+- `GEMINI_MODEL` may override real Gemini model candidates.
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` enable Source Management, Daily Cue snapshots, and Cue Bank sync.
+- Work Cue AI must not return mock AI output.
 
 ## Security Rules
 
@@ -144,13 +158,13 @@ If dependencies are not installed, do not install them without user approval. Re
 
 Manual smoke checks must cover:
 
-- Daily Cue loads 3 cards
+- Daily Cue loads live cards or a no-mock empty/error state
 - Save to Cue Bank
 - Open detail modal
 - Generate Work Cue
 - Save generated cue
 - Filter Cue Bank
-- Refresh and confirm localStorage persistence
+- Sign in with Supabase Auth and confirm Supabase-backed Cue Bank persistence
 
 ## Documentation Update Rules
 
@@ -181,6 +195,7 @@ Relevant docs:
 - Verify the Gemini model before production deployment.
 - Run smoke tests after deployment.
 - Do not deploy mock mode as the intended production AI path.
+- Configure Supabase secrets and run `docs/supabase-schema.sql` before claiming Source Management, Daily Cue snapshots, or remote Cue Bank works in preview.
 
 ## What AI Agents Must Not Do
 
@@ -191,5 +206,5 @@ Relevant docs:
 - Do not rewrite the UI from scratch.
 - Do not add unrelated features.
 - Do not change the locked MVP flow without product approval.
-- Do not replace localStorage with a database without a migration task.
+- Do not expose Supabase service role keys or reintroduce manual userId as authentication.
 - Do not change `src/types.ts` data contracts without updating `product-spec.md`.

@@ -8,5 +8,11 @@
       "source": "/((?!api/.*).*)",
       "destination": "/index.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/daily-cues/refresh",
+      "schedule": "0 16 * * *"
+    }
   ]
 }

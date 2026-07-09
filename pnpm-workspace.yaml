@@ -1,4 +1,9 @@
+packages:
+  - "."
+  - "desktop"
+
 allowBuilds:
   '@google/genai': true
+  electron: true
   esbuild: true
   protobufjs: true

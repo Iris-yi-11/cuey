@@ -1,0 +1,29 @@
+{
+  "name": "pm-cue-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build && esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --packages=external --outdir=dist-electron --out-extension:.js=.cjs",
+    "electron": "electron .",
+    "electron:dev": "PM_CUE_DESKTOP_DEV_URL=http://127.0.0.1:5174 electron .",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@vitejs/plugin-react": "^5.0.4",
+    "electron": "^33.0.0",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "tailwindcss": "^4.1.14",
+    "vite": "^6.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "esbuild": "^0.25.0",
+    "typescript": "~5.8.2"
+  }
+}

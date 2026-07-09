@@ -12,29 +12,34 @@ PM Cue 是面向产品经理的工作场景英语表达工具，帮助用户把�
 
 ## Key Features
 
-- Daily Cue: 3 curated PM English expression cards
-- Work Cue AI: generate a PM English cue from a Chinese thought and scenario
+- Daily Cue: 10+ live AI/Product/SaaS signals from curated sources, refreshed manually or by schedule
+- Source Management Lite: sync Supabase-managed sources, toggle sources on/off, and refresh the Daily Cue feed
+- Work Cue: generate a PM English cue from a Chinese thought and scenario through real Gemini only
+- Daily Work Cue: date-based daily prompt for PM English practice
 - Cue Detail Trainer: view explanation, key phrases, speaking prompt, and sample answer
-- Cue Bank: save useful cues, filter them, copy expressions, listen to pronunciation, and mark practice status
-- Mock AI fallback for local demos when `GEMINI_API_KEY` is unavailable
+- Global Auth: sign in with Supabase Auth through email magic link
+- Cue Bank: save useful cues, filter them, copy expressions, listen to pronunciation, and mark practice status, with Supabase Auth user sync
 
 ## MVP Scope
 
 In scope:
 
-- Single-page tabbed app with Daily Cue, Work Cue AI, and Cue Bank
-- Local browser persistence through `localStorage`
+- Single-page tabbed app with Daily Cue, Work Cue, and Cue Bank
+- Real Daily Cue source ingestion from curated allowlist sources
 - Server-side Gemini route at `/api/generate`
-- Mock data and mock generation for demo continuity
+- Server-side Supabase REST for Source Management, Daily Cue snapshots, and Cue Bank sync
+- Browser Supabase Auth for global login and user-owned Cue Bank records
+- Local browser persistence through `localStorage` only as a UI mirror / preview fallback
+- No mock API success path for Work Cue or Daily Cue feed
 
 Out of scope:
 
-- User accounts
-- Cloud database
 - Payments
 - Team sharing
 - Advanced learning analytics
 - Mobile app shell
+- Full admin dashboard for source CRUD
+- Automatic screen/OCR monitoring
 
 ## Tech Stack
 
@@ -44,16 +49,20 @@ Out of scope:
 - Tailwind CSS 4
 - Express
 - `@google/genai`
+- Supabase REST API
 - `lucide-react`
 - `motion/react`
+- Electron scaffold for local desktop companion
 
 ## Local Setup
 
 Prerequisites:
 
 - Node.js
-- npm
-- Gemini API key for real AI generation
+- pnpm or npm
+- `GEMINI_API_KEY` for Work Cue
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` for Source Management, Daily Cue snapshots, and server-side Cue Bank sync
+- `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for browser login
 
 Setup:
 
@@ -82,8 +91,9 @@ http://localhost:3000
 npm run dev
 npm run build
 npm run start
-npm run preview
 npm run lint
+npm run test
+npm run supabase:seed-sources
 ```
 
 The same scripts can be run with `pnpm run <script>` when using the bundled Codex runtime.
@@ -109,13 +119,26 @@ GEMINI_API_KEY
 
 Use `.env.local` for local secrets. Never commit real API keys.
 
-Current server-side Gemini model:
+Optional:
 
 ```text
-gemini-3.5-flash
+GEMINI_MODEL
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+VITE_SUPABASE_URL
+VITE_SUPABASE_ANON_KEY
+VITE_PUBLIC_SITE_URL
+KV_REST_API_URL
+KV_REST_API_TOKEN
 ```
 
-Optional runtime behavior currently exists in `server.ts` for mock mode, but `.env.example` intentionally documents required variables only.
+Default Gemini model candidates:
+
+```text
+gemini-2.5-flash,gemini-3.1-flash-lite,gemini-3.5-flash,gemini-2.5-flash-lite
+```
+
+Work Cue does not return mock AI output. Missing or unreachable Gemini returns an error state.
 
 ## Deployment Notes
 
@@ -126,7 +149,16 @@ Optional runtime behavior currently exists in `server.ts` for mock mode, but `.e
 - Vercel API route: `api/generate.ts`
 - Local production server still serves `dist/` through `dist/server.cjs`
 - Configure `GEMINI_API_KEY` in the deployment platform secret manager
-- Set `NEXT_PUBLIC_MOCK_AI=true` only for mock demo previews
+- Configure `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` for Source Management, Daily Cue snapshots, and Cue Bank sync
+- Configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth in the browser
+- Configure `VITE_PUBLIC_SITE_URL` only when local email-login testing should redirect back to the canonical public demo URL; deployed preview/production pages redirect back to their current origin
+- Configure Supabase Auth URL settings before public preview login testing:
+  - Site URL: the canonical public demo URL
+  - Redirect URLs: local dev URL, Vercel preview wildcard, and production/public demo URL
+- Enable Supabase Auth Email provider for MVP login; Google OAuth is intentionally deferred
+- Add `{{ .Token }}` to the Supabase Magic Link email template if you want users to enter the 6-digit code in the app instead of clicking the email link
+- Run `docs/supabase-schema.sql` before shipping preview if Daily Cue should be stable and identical for all users
+- Configure `KV_REST_API_URL` and `KV_REST_API_TOKEN` only if you also want optional Upstash/KV compatibility
 - See `docs/gemini-runtime.md` for Gemini runtime verification
 
 ## Public Demo Link

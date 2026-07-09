@@ -8,7 +8,8 @@ Date: 2026-06-17
 - Server endpoint: `POST /api/generate`
 - Server implementation: `server.ts`
 - SDK: `@google/genai`
-- Current model: `gemini-3.5-flash`
+- Default model candidates: `gemini-2.5-flash`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-2.5-flash-lite`
+- Optional override: `GEMINI_MODEL` can provide one or more comma-separated real Gemini model names.
 - Required secret: `GEMINI_API_KEY`
 
 ## Environment Loading
@@ -22,13 +23,13 @@ Real secrets must never be committed. Use deployment platform secret management 
 
 ## Model Verification
 
-Google's official Gemini API models page lists Gemini 3.5 Flash as stable and gives `gemini-3.5-flash` as a stable model string example. The page was last updated on 2026-06-15 UTC.
+The app uses real Gemini model routing only for Work Cue generation. It tries configured model candidates in order and does not return mock AI output when Gemini is missing or unavailable.
 
 Official source: https://ai.google.dev/gemini-api/docs/models
 
 ## Verified Paths
 
-### Missing Key / Mock Path
+### Missing Key
 
 Condition:
 
@@ -38,10 +39,10 @@ Condition:
 
 Expected behavior:
 
-- Server logs offline/mock mode.
-- `POST /api/generate` returns `success: true` with generated mock `item`.
+- Server logs that no valid `GEMINI_API_KEY` is configured.
+- `POST /api/generate` returns `success: false`.
 
-Status: Verified.
+Status: Verified by automated test in `src/services/geminiCueService.test.ts`.
 
 ### Invalid Scenario
 
@@ -61,16 +62,16 @@ Status: Verified.
 Condition:
 
 - `GEMINI_API_KEY` is configured with a non-placeholder value.
-- Mock mode is not forced.
+- `GEMINI_MODEL` is either unset or configured with real Gemini model names.
 
 Expected behavior:
 
-- Server initializes `GoogleGenAI`.
+- Server calls `ai.models.generateContent`.
 - `/api/generate` calls `ai.models.generateContent`.
 - Successful response is normalized into `GeneratedCueItem`.
-- Gemini errors return `500` with `success: false`.
+- Gemini errors return `500` with `success: false`; no mock item is returned.
 
-Status: Verified with a real key and reachable provider network through local proxy `127.0.0.1:7897`. Server initialized `GoogleGenAI`, entered the `[Gemini API]` branch, and returned `200` with `success: true`.
+Status: Verified on 2026-07-07. Server initialized the real Gemini path. With no proxy, the provider request timed out on the current local network. With `HTTPS_PROXY=http://127.0.0.1:7897` and `NODE_OPTIONS=--use-env-proxy`, `/api/generate` returned `success: true` with `modelUsed: "gemini-2.5-flash"`.
 
 Observed real-key response shape:
 
@@ -117,7 +118,7 @@ Real Gemini path:
 GEMINI_API_KEY="your-real-key" pnpm run dev
 ```
 
-Then run the same mock generation request and confirm the response content is produced through Gemini, not offline fallback.
+Then run the same generation request and confirm the response includes `success: true`, a generated `item`, and `modelUsed`.
 
 If direct Google/Gemini access times out on the local network, use the local proxy discovered during verification:
 

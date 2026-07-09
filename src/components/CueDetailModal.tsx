@@ -16,7 +16,8 @@ import {
   ChevronUp, 
   Volume2, 
   HelpCircle,
-  MessageSquare
+  MessageSquare,
+  ExternalLink
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -42,25 +43,44 @@ export default function CueDetailModal({
 
   if (!isOpen || !item) return null;
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(item.englishOutput);
-    setCopied(true);
-    showToast("Copied to clipboard!");
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        showToast("当前浏览器不支持直接复制，请手动选择文本复制。");
+        return;
+      }
+
+      await navigator.clipboard.writeText(item.englishOutput);
+      setCopied(true);
+      showToast("Copied to clipboard!");
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error("Modal copy failed:", error);
+      showToast("复制失败，请手动选择文本复制。");
+    }
   };
 
   // Speaks aloud using window.speechSynthesis (optional nice-to-have, robust check)
   const handleTTS = () => {
-    if ("speechSynthesis" in window) {
+    try {
+      if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
+        showToast("当前浏览器不支持发音播放。");
+        return;
+      }
+
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(item.englishOutput);
       utterance.lang = "en-US";
       // Pick a natural speaking rate
       utterance.rate = 0.9;
+      utterance.onerror = () => {
+        showToast("发音播放失败，请稍后重试。");
+      };
       window.speechSynthesis.speak(utterance);
       showToast("Speaking PM Cue expression...");
-    } else {
-      showToast("TTS not supported in this browser.");
+    } catch (error) {
+      console.error("Modal speech synthesis failed:", error);
+      showToast("发音播放失败，请稍后重试。");
     }
   };
 
@@ -120,6 +140,20 @@ export default function CueDetailModal({
               <p className="text-xs font-mono text-slate-400 mt-1">
                 Created: {new Date(item.createdAt).toLocaleDateString()}
               </p>
+              {item.sourceRef && (
+                <a
+                  href={item.sourceRef.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-mono font-bold text-indigo-650 hover:text-indigo-850 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-1.5 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>{item.sourceRef.sourceName}</span>
+                  <span className="text-slate-400 font-normal">
+                    {new Date(item.sourceRef.publishedAt).toLocaleDateString()}
+                  </span>
+                </a>
+              )}
             </div>
 
             {/* Core Chinese Thought Section */}

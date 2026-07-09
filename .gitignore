@@ -5,6 +5,7 @@ node_modules/
 # Build outputs
 dist/
 build/
+desktop/dist-electron/
 coverage/
 .vite/
 .vercel/
@@ -27,8 +28,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Local agent planning artifacts
+docs/superpowers/
+
 # OS and editor files
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+.vercel

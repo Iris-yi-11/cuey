@@ -6,17 +6,34 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
-import { CueType, GENERATE_CUE_SCENARIOS } from "./src/types";
-import type { GenerateCueScenario, GeneratedCueItem } from "./src/types";
+import { GENERATE_CUE_SCENARIOS } from "./src/types";
+import type { GenerateCueScenario } from "./src/types";
+import { sourceCategories } from "./src/data/sourceAllowlist";
+import { getDailyCues, refreshDailyCues } from "./src/services/dailyCueService";
+import { buildDailyWorkCue } from "./src/services/dailyWorkCueService";
+import { generatePMCueWithGemini, isGeminiConfigured } from "./src/services/geminiCueService";
+import {
+  deleteCueBankItem,
+  isCueBankRemoteEnabled,
+  listCueBankItems,
+  upsertCueBankItem,
+} from "./src/services/cueBankRepository";
+import {
+  listManagedSources,
+  updateManagedSourceEnabled,
+} from "./src/services/sourceManagementRepository";
+import {
+  getSupabaseUserIdFromAuthHeader,
+  isSupabaseConfigured,
+  requestSupabaseTable,
+} from "./src/services/supabaseRestService";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
-const GEMINI_MODEL = "gemini-3.5-flash";
+const PORT = Number(process.env.PORT || 3000);
 
 app.use(express.json());
 
@@ -24,27 +41,180 @@ const isGenerateCueScenario = (value: unknown): value is GenerateCueScenario =>
   typeof value === "string" &&
   (GENERATE_CUE_SCENARIOS as readonly string[]).includes(value);
 
-// Initialize Gemini client strictly using Guidelines
-let ai: GoogleGenAI | null = null;
-const apiKey = process.env.GEMINI_API_KEY;
+if (isGeminiConfigured()) {
+  console.log("Gemini API key configured. Work Cue generation will use real Gemini models only.");
+} else {
+  console.log("No valid GEMINI_API_KEY found. Work Cue generation will return an error.");
+}
 
-if (apiKey && apiKey !== "MY_GEMINI_API_KEY" && apiKey !== "") {
+app.get("/api/daily-cues", async (_req, res) => {
+  const result = await getDailyCues();
+  return res.json({
+    success: true,
+    ...result,
+    lastUpdatedAt: result.brief.lastUpdatedAt,
+    nextRefreshAt: result.brief.nextRefreshAt,
+  });
+});
+
+app.post("/api/daily-cues/refresh", async (_req, res) => {
+  const result = await refreshDailyCues();
+  return res.json({
+    success: true,
+    ...result,
+    lastUpdatedAt: result.brief.lastUpdatedAt,
+    nextRefreshAt: result.brief.nextRefreshAt,
+  });
+});
+
+app.get("/api/work-cues/daily", (_req, res) => {
+  return res.json({ success: true, item: buildDailyWorkCue() });
+});
+
+app.get("/api/sources", async (_req, res) => {
+  const sources = await listManagedSources();
+  return res.json({
+    success: true,
+    categories: sourceCategories,
+    sources,
+  });
+});
+
+app.get("/api/cue-bank", async (req, res) => {
   try {
-    ai = new GoogleGenAI({
-      apiKey: apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
+    const userId = await getSupabaseUserIdFromAuthHeader(req.headers.authorization);
+    if (!userId) {
+      return res.json({
+        success: true,
+        remoteEnabled: isCueBankRemoteEnabled(),
+        requiresAuth: true,
+        items: [],
+      });
+    }
+
+    const items = await listCueBankItems(userId);
+    return res.json({
+      success: true,
+      remoteEnabled: isCueBankRemoteEnabled(),
+      items: items || [],
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.post("/api/cue-bank", async (req, res) => {
+  try {
+    const userId = await getSupabaseUserIdFromAuthHeader(req.headers.authorization);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Sign in is required for Cue Bank sync." });
+    }
+
+    const item = req.body?.item;
+    if (!item?.id) {
+      return res.status(400).json({ success: false, error: "Cue item is required." });
+    }
+
+    const saved = await upsertCueBankItem(userId, item);
+    return res.json({
+      success: true,
+      remoteEnabled: isCueBankRemoteEnabled(),
+      item: saved || item,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.delete("/api/cue-bank", async (req, res) => {
+  try {
+    const userId = await getSupabaseUserIdFromAuthHeader(req.headers.authorization);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Sign in is required for Cue Bank sync." });
+    }
+
+    const itemId = String(req.query?.id || req.body?.id || "");
+    if (!itemId) {
+      return res.status(400).json({ success: false, error: "Cue item id is required." });
+    }
+
+    const deleted = await deleteCueBankItem(userId, itemId);
+    return res.json({ success: true, remoteEnabled: isCueBankRemoteEnabled(), deleted });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.get("/api/source-management", async (_req, res) => {
+  try {
+    const sources = await listManagedSources();
+    return res.json({ success: true, categories: sourceCategories, sources });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.patch("/api/source-management", async (req, res) => {
+  try {
+    const { sourceId, enabled } = req.body || {};
+    if (!sourceId || typeof enabled !== "boolean") {
+      return res.status(400).json({ success: false, error: "sourceId and enabled are required." });
+    }
+
+    const source = await updateManagedSourceEnabled(sourceId, enabled);
+    if (!source) {
+      return res.status(404).json({ success: false, error: "Managed source not found." });
+    }
+    return res.json({ success: true, source });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.get("/api/supabase-health", async (_req, res) => {
+  try {
+    if (!isSupabaseConfigured()) {
+      return res.json({
+        success: true,
+        configured: false,
+        message: "Supabase env vars are not configured.",
+      });
+    }
+
+    const sources = await requestSupabaseTable<{ id: string }[]>("source_allowlist", {
+      query: "select=id&limit=1",
+    });
+    const cueItems = await requestSupabaseTable<{ id: string }[]>("cue_bank_items", {
+      query: "select=id&limit=1",
+    });
+    const dailySnapshots = await requestSupabaseTable<{ date: string }[]>("daily_cue_snapshots", {
+      query: "select=date&limit=1",
+    });
+
+    return res.json({
+      success: true,
+      configured: true,
+      tables: {
+        source_allowlist: "ok",
+        cue_bank_items: "ok",
+        daily_cue_snapshots: "ok",
+      },
+      sampleCounts: {
+        source_allowlist: sources.length,
+        cue_bank_items: cueItems.length,
+        daily_cue_snapshots: dailySnapshots.length,
       },
     });
-    console.log("Gemini API Client initialized successfully.");
-  } catch (err) {
-    console.error("Error initializing Gemini client:", err);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ success: false, configured: true, error: message });
   }
-} else {
-  console.log("No valid GEMINI_API_KEY found, running in offline/mock model mode.");
-}
+});
 
 // REST API route for PM English Cues generation
 app.post("/api/generate", async (req, res) => {
@@ -59,130 +229,10 @@ app.post("/api/generate", async (req, res) => {
       return res.status(400).json({ success: false, error: "Unsupported PM Cue scenario." });
     }
 
-    const isMockMode = process.env.NEXT_PUBLIC_MOCK_AI === "true" || !ai;
+    console.log(`[Gemini API] Requesting real AI generation for scenario: "${scenario}"`);
+    const { item, modelUsed } = await generatePMCueWithGemini(chineseThought, scenario);
 
-    if (isMockMode) {
-      console.log(`[Offline Fallback] Translating Chinese thought: "${chineseThought}" for scenario: ${scenario}`);
-      // Simulated generation based on input scenario & thoughts
-      // We will generate a clever dynamic mock card to provide high user experience
-      let title = "Aligning Core Expectations";
-      let englishOutput = "We should prioritize our core path to align expectations across the board.";
-      let phrases = ["core path", "align expectations", "across the board"];
-      let speakingPrompt = `How do you explain this focus during a ${scenario} sync?`;
-      let sampleAnswer = `I would suggest we double down on the core path to align everyone's expectations.`;
-
-      if (scenario === "Meeting") {
-        title = "Addressing Sync Alignment";
-        englishOutput = `Regarding the synchronization, ${chineseThought} in natural English terms means: We must coordinate closely to streamline our upcoming sprints.`;
-        phrases = ["coordinate closely", "streamline sprints", "project sync"];
-        speakingPrompt = "How do you align multiple team schedules during a tense meeting?";
-        sampleAnswer = "I usually open the sync by outlining our priorities to ensure tight alignment early on.";
-      } else if (scenario === "PRD Review") {
-        title = "Refining Product Specifications";
-        englishOutput = `In our PRD context: ${chineseThought} translates to: Let's optimize this feature logic to avoid any regression on core parameters.`;
-        phrases = ["feature logic", "core parameters", "avoid regression"];
-        speakingPrompt = "What phrasing do you use to ask engineers for a simpler visual solution?";
-        sampleAnswer = "I'd ask them if we could tackle this iteratively to address the immediate core user pain point.";
-      } else if (scenario === "Stakeholder Update") {
-        title = "Managing Stakeholder Priorities";
-        englishOutput = `For stakeholders, this means: ${chineseThought} - We are closely monitoring our deliverable velocity to assure premium delivery.`;
-        phrases = ["deliverable velocity", "premium delivery", "stakeholder consensus"];
-        speakingPrompt = "How do you manage aggressive stakeholder feature requests during roadmapping?";
-        sampleAnswer = "I'd explain that focusing on our core metrics first ensures our foundational launch remains highly secure.";
-      }
-
-      // Add a small delay to simulate realistic AI generation feel
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      const mockResult: GeneratedCueItem = {
-        id: `cue_generated_${Date.now()}`,
-        sourceType: "work" as const,
-        cueType: CueType.AI_PRODUCT,
-        title,
-        chineseExplanation: chineseThought,
-        englishOutput,
-        phrases,
-        scenario,
-        speakingPrompt,
-        sampleAnswer,
-        createdAt: new Date().toISOString(),
-      };
-
-      return res.json({ success: true, item: mockResult });
-    }
-
-    // Call real Gemini API
-    console.log(`[Gemini API] Requesting AI generation for scenario: "${scenario}"`);
-    const prompt = `
-      You are an expert Product Manager coach who turns raw Chinese ideas or tasks into work-native, elegant PM English.
-      
-      Look at this raw Chinese thought from a Product Manager: "${chineseThought}"
-      They want to express this in a professional work context: "${scenario}" (options are: Meeting, PRD Review, Stakeholder Update).
-      
-      Convert this thought into "work-native" PM English. Avoid rigid literal translations. 
-      For example, instead of translating "这个需求不紧急" to "This requirement is not urgent", translate it to "This isn't on the critical path right now".
-      Make it feel polished, elegant, and highly authoritative in a Silicon Valley SaaS team standard.
-      
-      Output your response as JSON conforming strictly to the requested response schema.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            title: {
-              type: Type.STRING,
-              description: "A short, elegant English title for this cue card, e.g. 'Aligning Timelines', 'Managing Scope Creep', or 'Data-Driven Consensus'.",
-            },
-            chineseExplanation: {
-              type: Type.STRING,
-              description: "The original Chinese workspace thought provided by the user.",
-            },
-            englishOutput: {
-              type: Type.STRING,
-              description: "The polished, authentic work-native PM English equivalent.",
-            },
-            phrases: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Exactly 2 or 3 high-impact professional phrases or terms used in the English output, e.g. ['critical path', 'cognitive load'].",
-            },
-            speakingPrompt: {
-              type: Type.STRING,
-              description: "A short, interactive question or prompt for the user to practice speaking, e.g. 'How would you present this timeline shift to your stakeholders?'",
-            },
-            sampleAnswer: {
-              type: Type.STRING,
-              description: "A short, natural oral response example mapping exactly how the user can answering the speaking prompt using some of the phrases.",
-            },
-          },
-          required: ["title", "chineseExplanation", "englishOutput", "phrases", "speakingPrompt", "sampleAnswer"],
-        },
-      },
-    });
-
-    const parsedData = JSON.parse(response.text || "{}");
-
-    // Construct final CueItem format (excluding parent state tracking)
-    const generatedCue: GeneratedCueItem = {
-      id: `cue_generated_${Date.now()}`,
-      sourceType: "work" as const,
-      cueType: CueType.AI_PRODUCT,
-      title: parsedData.title || "PM English Cue",
-      chineseExplanation: parsedData.chineseExplanation || chineseThought,
-      englishOutput: parsedData.englishOutput || "",
-      phrases: parsedData.phrases || [],
-      scenario: scenario,
-      speakingPrompt: parsedData.speakingPrompt || "How would you state this to your team members?",
-      sampleAnswer: parsedData.sampleAnswer || "I would focus on communicating our metrics and tracking deliverables.",
-      createdAt: new Date().toISOString(),
-    };
-
-    return res.json({ success: true, item: generatedCue });
+    return res.json({ success: true, item, modelUsed });
 
   } catch (error: any) {
     console.error("Gemini service error during API call:", error);
