@@ -156,7 +156,8 @@ Work Cue does not return mock AI output. Missing or unreachable Gemini returns a
   - Site URL: the canonical public demo URL
   - Redirect URLs: local dev URL, Vercel preview wildcard, and production/public demo URL
 - Enable Supabase Auth Email provider for MVP login; Google OAuth is intentionally deferred
-- Add `{{ .Token }}` to the Supabase Magic Link email template if you want users to enter the 6-digit code in the app instead of clicking the email link
+- Add `{{ .Token }}` to the Supabase Magic Link email template so users can enter a 6-digit code in the app when mobile email clients block the link redirect
+- Cue Bank saves are cloud-first after sign-in; local storage is only a UI mirror and should not be treated as production data
 - Run `docs/supabase-schema.sql` before shipping preview if Daily Cue should be stable and identical for all users
 - Configure `KV_REST_API_URL` and `KV_REST_API_TOKEN` only if you also want optional Upstash/KV compatibility
 - See `docs/gemini-runtime.md` for Gemini runtime verification

@@ -79,4 +79,61 @@ describe("supabaseAuthClient", () => {
       })
     );
   });
+
+  it("exchanges auth code redirects for a browser session and clears the url", async () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", {
+      location: {
+        pathname: "/",
+        search: "?code=auth-code",
+        hash: "",
+      },
+      history: {
+        replaceState,
+      },
+    });
+    const client = {
+      auth: {
+        exchangeCodeForSession: vi.fn().mockResolvedValue({ error: null }),
+        getSession: vi.fn(),
+      },
+    };
+    const { completeSupabaseRedirectSignIn } = await import("./supabaseAuthClient");
+
+    await expect(completeSupabaseRedirectSignIn(client as any)).resolves.toEqual({
+      success: true,
+      handled: true,
+    });
+    expect(client.auth.exchangeCodeForSession).toHaveBeenCalledWith("auth-code");
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/");
+  });
+
+  it("returns Supabase auth redirect errors and clears the url", async () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", {
+      location: {
+        pathname: "/",
+        search: "?error_description=Email+link+expired",
+        hash: "",
+      },
+      history: {
+        replaceState,
+      },
+    });
+    const client = {
+      auth: {
+        exchangeCodeForSession: vi.fn(),
+        getSession: vi.fn(),
+      },
+    };
+    const { completeSupabaseRedirectSignIn } = await import("./supabaseAuthClient");
+
+    await expect(completeSupabaseRedirectSignIn(client as any)).resolves.toEqual({
+      success: false,
+      handled: true,
+      error: "Email link expired",
+    });
+    expect(client.auth.exchangeCodeForSession).not.toHaveBeenCalled();
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/");
+  });
 });

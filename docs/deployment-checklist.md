@@ -126,6 +126,11 @@ pnpm run dev
   - add the exact production/public demo URL, for example `https://cuey-sigma.vercel.app/**`,
   - keep `VITE_PUBLIC_SITE_URL` optional; Vercel preview pages use their current preview origin for email redirects,
   - update the Magic Link email template to include `{{ .Token }}` if users should sign in by entering a 6-digit code instead of clicking the email link.
+- Recommended Magic Link template body:
+  - keep the `{{ .ConfirmationURL }}` link,
+  - add visible text such as `验证码 / Code: {{ .Token }}`,
+  - keep the code short-lived and remind users it can only be used once.
+- Cue Bank shipping rule: after sign-in, Supabase is the source of truth; local storage is only a browser mirror for UI continuity.
 
 ## P1 Desktop Companion
 

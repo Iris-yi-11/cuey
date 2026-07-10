@@ -6,7 +6,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   loadCueBankFromStorage,
-  mergeCueBankItemsById,
   saveCueBankToStorage,
 } from "./utils/cueBankStorage";
 import {
@@ -28,7 +27,7 @@ import CueDetailModal from "./components/CueDetailModal";
 import AuthMenu from "./components/AuthMenu";
 import SourceManagementPanel from "./components/SourceManagementPanel";
 import WorkCuePanel from "./components/WorkCuePanel";
-import { getSupabaseBrowserClient, readSupabaseAuthErrorFromUrl } from "./services/supabaseAuthClient";
+import { completeSupabaseRedirectSignIn, getSupabaseBrowserClient } from "./services/supabaseAuthClient";
 import type { User } from "@supabase/supabase-js";
 import {
   deleteCueBankItemFromRemote,
@@ -139,10 +138,25 @@ export default function App() {
     }
 
     let isMounted = true;
-    client.auth.getSession().then(({ data }) => {
+    const initializeSession = async () => {
+      const redirectResult = await completeSupabaseRedirectSignIn(client);
+      if (isMounted && redirectResult.error) {
+        triggerToast(redirectResult.error, "error");
+      }
+
+      const { data } = await client.auth.getSession();
       if (!isMounted) return;
       setAuthUser(data.session?.user || null);
       setAuthAccessToken(data.session?.access_token || null);
+      setIsAuthLoading(false);
+      if (redirectResult.handled && redirectResult.success && data.session?.user) {
+        triggerToast("已登录，Cue Bank 将同步到云端。", "success");
+      }
+    };
+
+    initializeSession().catch((error) => {
+      if (!isMounted) return;
+      triggerToast(error instanceof Error ? error.message : "登录状态恢复失败。", "error");
       setIsAuthLoading(false);
     });
 
@@ -232,13 +246,13 @@ export default function App() {
   const [bankSourceFilter, setBankSourceFilter] = useState<"all" | "daily" | "work">("all");
   const [bankStatusFilter, setBankStatusFilter] = useState<"all" | "unfinished" | "completed">("all");
 
-  // Load the local mirror first, then use the cloud profile userId as remote source of truth.
+  // Use Supabase as the source of truth when the user is signed in. Local storage is only a mirror.
   useEffect(() => {
     const loadCueBank = async () => {
       const localItems = loadCueBankFromStorage([]);
-      setCues(localItems);
 
       if (!authAccessToken) {
+        setCues(localItems);
         setIsRemoteCueBankEnabled(false);
         return;
       }
@@ -246,10 +260,10 @@ export default function App() {
       const response = await fetchCueBankItems(authAccessToken);
       setIsRemoteCueBankEnabled(Boolean(response.remoteEnabled));
       if (response.success && response.remoteEnabled && response.items) {
-        const merged = mergeCueBankItemsById(localItems, response.items);
-        setCues(merged);
-        saveCueBankToStorage(merged);
+        setCues(response.items);
+        saveCueBankToStorage(response.items);
       } else if (!response.success) {
+        setCues(localItems);
         triggerToast(response.error || "云端 Cue Bank 暂时无法加载。", "error");
       }
     };
@@ -271,35 +285,42 @@ export default function App() {
     }
   };
 
-  const syncCueBankItem = async (item: CueItem) => {
+  const saveCueBankItemToCloud = async (item: CueItem): Promise<CueItem | null> => {
     if (!authAccessToken) {
       setIsRemoteCueBankEnabled(false);
-      triggerToast("请先登录，再同步到云端 Cue Bank。", "info");
-      return;
+      triggerToast("请先登录，再收藏到云端 Cue Bank。", "info");
+      return null;
     }
 
     const response = await saveCueBankItem(authAccessToken, item);
     if (response.remoteEnabled) {
       setIsRemoteCueBankEnabled(true);
     }
-    if (response.remoteEnabled && !response.success) {
-      triggerToast("远程 Cue Bank 同步失败，本地已保存。", "error");
+    if (response.success && response.item) {
+      return response.item;
     }
+
+    triggerToast(response.error || "云端 Cue Bank 保存失败，请稍后重试。", "error");
+    return null;
   };
 
-  const syncCueBankDelete = async (id: string) => {
+  const deleteCueBankItemFromCloud = async (id: string): Promise<boolean> => {
     if (!authAccessToken) {
       setIsRemoteCueBankEnabled(false);
-      return;
+      triggerToast("请先登录，再管理云端 Cue Bank。", "info");
+      return false;
     }
 
     const response = await deleteCueBankItemFromRemote(authAccessToken, id);
     if (response.remoteEnabled) {
       setIsRemoteCueBankEnabled(true);
     }
-    if (response.remoteEnabled && !response.success) {
-      triggerToast("远程 Cue Bank 删除失败，本地已更新。", "error");
+    if (response.success) {
+      return true;
     }
+
+    triggerToast(response.error || "云端 Cue Bank 删除失败，请稍后重试。", "error");
+    return false;
   };
 
   // Toast Generator Helper
@@ -313,48 +334,49 @@ export default function App() {
     }, 3200);
   };
 
-  useEffect(() => {
-    const authError = readSupabaseAuthErrorFromUrl();
-    if (!authError) return;
-
-    triggerToast(authError, "error");
-    window.history.replaceState(null, "", window.location.pathname || "/");
-  }, []);
-
   // State actions
-  const handleToggleSave = (id: string, forceToast?: string) => {
-    let message = "";
-    let didUpdateExisting = false;
-    let updated = cues.map((item) => {
-      if (item.id === id) {
-        didUpdateExisting = true;
-        const nextSavedState = !item.isSaved;
-        message = nextSavedState ? "Saved to Cue Bank" : "Removed from Cue Bank";
-        return { ...item, isSaved: nextSavedState };
-      }
-      return item;
-    });
+  const findCueForSave = (id: string): CueItem | null => {
+    const existing = cues.find((item) => item.id === id || item.dailyCueId === id);
+    if (existing) return existing;
 
-    if (!didUpdateExisting) {
-      const dailyItem = dailyCueItems.find((item) => item.id === id);
-      if (dailyItem) {
-        updated = [{ ...buildCueFromDailyItem(dailyItem, cues), isSaved: true }, ...updated];
-        message = "Saved to Cue Bank";
-      }
+    const dailyItem = dailyCueItems.find((item) => item.id === id);
+    if (dailyItem) return buildCueFromDailyItem(dailyItem, cues);
+
+    if (latestGeneratedCue?.id === id) return latestGeneratedCue;
+
+    return null;
+  };
+
+  const handleToggleSave = async (id: string, forceToast?: string) => {
+    const targetCue = findCueForSave(id);
+    if (!targetCue) return;
+
+    if (!authAccessToken) {
+      triggerToast("请先登录，再收藏到云端 Cue Bank。", "info");
+      return;
     }
 
+    if (targetCue.isSaved) {
+      const didDelete = await deleteCueBankItemFromCloud(targetCue.id);
+      if (!didDelete) return;
+
+      const updated = cues.map((item) =>
+        item.id === targetCue.id ? { ...item, isSaved: false } : item
+      );
+      updateCuesInStateAndStore(updated);
+      triggerToast(forceToast || "Removed from Cue Bank");
+      return;
+    }
+
+    const saved = await saveCueBankItemToCloud({ ...targetCue, isSaved: true });
+    if (!saved) return;
+
+    const didUpdateExisting = cues.some((item) => item.id === saved.id);
+    const updated = didUpdateExisting
+      ? cues.map((item) => (item.id === saved.id ? saved : item))
+      : [saved, ...cues];
     updateCuesInStateAndStore(updated);
-    const changed = updated.find((item) => item.id === id || item.dailyCueId === id);
-    if (changed) {
-      if (changed.isSaved) {
-        void syncCueBankItem(changed);
-      } else {
-        void syncCueBankDelete(changed.id);
-      }
-    }
-    if (forceToast || message) {
-      triggerToast(forceToast || message);
-    }
+    triggerToast(forceToast || "Saved to Cue Bank");
   };
 
   const handleToggleDone = (id: string) => {
@@ -381,15 +403,17 @@ export default function App() {
     updateCuesInStateAndStore(updated);
     const changed = updated.find((item) => item.id === id || item.dailyCueId === id);
     if (changed?.isSaved) {
-      void syncCueBankItem(changed);
+      void saveCueBankItemToCloud(changed);
     }
     if (message) {
       triggerToast(message, "info");
     }
   };
 
-  const handleDeleteFromBank = (id: string) => {
-    // Soft removal or Unsaving from the bank
+  const handleDeleteFromBank = async (id: string) => {
+    const didDelete = await deleteCueBankItemFromCloud(id);
+    if (!didDelete) return;
+
     const updated = cues.map((item) => {
       if (item.id === id) {
         return { ...item, isSaved: false };
@@ -397,7 +421,6 @@ export default function App() {
       return item;
     });
     updateCuesInStateAndStore(updated);
-    void syncCueBankDelete(id);
     triggerToast("Removed from Cue Bank", "success");
   };
 
@@ -1112,7 +1135,7 @@ export default function App() {
                     ? isRemoteCueBankEnabled
                       ? "Supabase sync"
                       : "signed in"
-                    : "local preview"}
+                    : "sign in to save"}
                 </span>
               </div>
             </div>

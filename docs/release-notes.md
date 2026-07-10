@@ -30,7 +30,9 @@ Date: 2026-07-09
 - Renamed the main navigation label from `Work Cue AI` to `Work Cue`.
 - Added global Supabase Auth module with email magic link and 6-digit OTP code entry points.
 - Added Supabase Auth provider detection, local/public redirect support, deployed-origin redirects, and redirect error handling for preview login readiness.
+- Hardened Supabase Auth callback handling so `code` redirects exchange into browser sessions and mobile-blocked email links can fall back to visible OTP entry.
 - Replaced Cue Bank Cloud Profile userId sync with authenticated Supabase user sync.
+- Changed Cue Bank save/delete behavior to cloud-first after sign-in; the UI updates only after Supabase confirms the operation.
 - Added Vitest test runner and initial service tests for development-stage verification.
 - Extracted Daily Cue display view-model helpers with unit coverage to reduce `App.tsx` change risk.
 - Extracted Work Cue generator UI into `WorkCuePanel` while preserving existing state and user flow.

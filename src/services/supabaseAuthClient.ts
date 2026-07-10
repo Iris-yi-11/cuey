@@ -72,6 +72,61 @@ export const readSupabaseAuthErrorFromUrl = (): string | null => {
   return description ? decodeURIComponent(description.replace(/\+/g, " ")) : null;
 };
 
+const clearAuthParamsFromUrl = () => {
+  if (typeof window === "undefined") return;
+
+  const cleanUrl = `${window.location.pathname || "/"}${window.location.hash && !window.location.hash.includes("access_token") ? window.location.hash : ""}`;
+  window.history.replaceState(null, "", cleanUrl);
+};
+
+export interface SupabaseRedirectSignInResult {
+  success: boolean;
+  handled: boolean;
+  error?: string;
+}
+
+export const completeSupabaseRedirectSignIn = async (
+  client: SupabaseClient
+): Promise<SupabaseRedirectSignInResult> => {
+  if (typeof window === "undefined") return { success: true, handled: false };
+
+  const authError = readSupabaseAuthErrorFromUrl();
+  if (authError) {
+    clearAuthParamsFromUrl();
+    return { success: false, handled: true, error: authError };
+  }
+
+  const searchParams = new URLSearchParams(window.location.search);
+  const code = searchParams.get("code");
+  if (code) {
+    const { error } = await client.auth.exchangeCodeForSession(code);
+    clearAuthParamsFromUrl();
+    if (error) {
+      return { success: false, handled: true, error: error.message };
+    }
+
+    return { success: true, handled: true };
+  }
+
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const hasImplicitSession =
+    hashParams.has("access_token") || hashParams.has("refresh_token") || hashParams.has("type");
+  if (hasImplicitSession) {
+    const { data, error } = await client.auth.getSession();
+    if (data.session) {
+      clearAuthParamsFromUrl();
+      return { success: true, handled: true };
+    }
+
+    if (error) {
+      clearAuthParamsFromUrl();
+      return { success: false, handled: true, error: error.message };
+    }
+  }
+
+  return { success: true, handled: false };
+};
+
 export const getSupabaseBrowserClient = (): SupabaseClient | null => {
   const config = getAuthConfig();
   if (!config) return null;

@@ -13,6 +13,8 @@ import {
   isSupabaseAuthConfigured,
 } from "../services/supabaseAuthClient";
 
+const pendingAuthEmailStorageKey = "pm_cue_pending_auth_email";
+
 interface AuthMenuProps {
   user: User | null;
   isLoading: boolean;
@@ -36,6 +38,16 @@ export default function AuthMenu({
   const authConfigured = isSupabaseAuthConfigured();
   const client = getSupabaseBrowserClient();
   const isEmailAvailable = providerStatus?.email !== false;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const pendingEmail = window.localStorage.getItem(pendingAuthEmailStorageKey);
+    if (!pendingEmail) return;
+
+    setEmail(pendingEmail);
+    setSentEmail(pendingEmail);
+  }, []);
 
   useEffect(() => {
     if (!authConfigured) return;
@@ -79,7 +91,10 @@ export default function AuthMenu({
 
     setSentEmail(normalizedEmail);
     setOtpCode("");
-    onAuthSuccess("登录邮件已发送。可点击邮件链接，或输入邮件中的验证码。");
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(pendingAuthEmailStorageKey, normalizedEmail);
+    }
+    onAuthSuccess("登录邮件已发送。若手机点击链接失败，请回到这里输入邮件验证码。");
   };
 
   const handleVerifyOtp = async (event: React.FormEvent) => {
@@ -100,6 +115,10 @@ export default function AuthMenu({
     }
 
     setOtpCode("");
+    setSentEmail("");
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(pendingAuthEmailStorageKey);
+    }
     onAuthSuccess("已登录，Cue Bank 将同步到云端。");
   };
 
@@ -109,6 +128,9 @@ export default function AuthMenu({
     if (error) {
       onAuthError(error.message);
       return;
+    }
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(pendingAuthEmailStorageKey);
     }
     onAuthSuccess("已退出登录。");
   };
@@ -158,14 +180,14 @@ export default function AuthMenu({
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             disabled={!authConfigured || isProviderStatusLoading || !isEmailAvailable || isSending || isVerifying}
-            placeholder="输入邮箱获取登录链接"
+            placeholder="输入邮箱获取登录验证码"
             className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs outline-none focus:border-slate-400 focus:bg-white disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={!authConfigured || isProviderStatusLoading || !isEmailAvailable || isSending || isVerifying || !email.trim()}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-mono font-extrabold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Send magic link"
+            title="Send sign-in email"
           >
             <Mail className="h-3.5 w-3.5" />
             {isSending ? "发送中" : "发送"}
@@ -173,24 +195,29 @@ export default function AuthMenu({
         </form>
       </div>
       {sentEmail && (
-        <form onSubmit={handleVerifyOtp} className="flex gap-1.5">
-          <input
-            value={otpCode}
-            onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-            disabled={!authConfigured || isProviderStatusLoading || !isEmailAvailable || isSending || isVerifying}
-            inputMode="numeric"
-            placeholder="输入 6 位验证码"
-            className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs outline-none focus:border-slate-400 focus:bg-white disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={!authConfigured || isProviderStatusLoading || !isEmailAvailable || isSending || isVerifying || otpCode.length < 6}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono font-extrabold text-slate-700 transition hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Verify email code"
-          >
-            {isVerifying ? "验证中" : "验证"}
-          </button>
-        </form>
+        <div className="space-y-1.5">
+          <form onSubmit={handleVerifyOtp} className="flex gap-1.5">
+            <input
+              value={otpCode}
+              onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+              disabled={!authConfigured || isProviderStatusLoading || !isEmailAvailable || isSending || isVerifying}
+              inputMode="numeric"
+              placeholder="输入 6 位验证码"
+              className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs outline-none focus:border-slate-400 focus:bg-white disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={!authConfigured || isProviderStatusLoading || !isEmailAvailable || isSending || isVerifying || otpCode.length < 6}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono font-extrabold text-slate-700 transition hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Verify email code"
+            >
+              {isVerifying ? "验证中" : "验证"}
+            </button>
+          </form>
+          <p className="px-1 text-[11px] leading-relaxed text-slate-500">
+            手机邮箱或微信内置浏览器打不开链接时，可输入邮件中的 6 位验证码登录。
+          </p>
+        </div>
       )}
     </div>
   );
